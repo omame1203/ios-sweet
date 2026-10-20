@@ -13,6 +13,24 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21 dizi platform completeness audit (source/log review only):**
+  `docs/DIZI_PORT_GAP_AUDIT.md` is the prioritized porting dependency
+  inventory, grounded in `boards/dizi.json`, XNU patches, the live FDT
+  and saved dizi logs. The lock/home screen and real power/volume-up-as-Home
+  tests establish a native GUI/input milestone, NOT a complete SM7435
+  platform port. Outstanding before reliable sustained use: dizi real
+  PMIC-GLINK fuel gauge/charger/thermal (current 100%/4200mV static
+  fallback), DSI LCD backlight/panel power (0079 only blackens the ABL
+  framebuffer), proper RPMh/GCC/pinctrl/PDC services, RTC, restart and
+  suspend/resume; CPU0-only at cpus=1, A55/A78 SMP untested; UFS still
+  depends on ABL initialization. Native XNU USB/ECM is disabled/unverified;
+  device Wi-Fi/BT/audio/camera/sensors not ported. Touch additionally needs
+  owned two-domain SMMU IOVA mappings, GPII0 DMA and BOE firmware download
+  despite 0100 ARM64 full build success. No hardware action performed for
+  this audit; preserve verified GUI/key-test image. First prioritize reliable
+  battery/thermal state and LCD power for safe extended operation, then
+  clock/interrupt/dma infrastructure and staged multicore/peripheral tests.
+
 - **2026-10-21: physical volume-up as Home confirmed on native iPadOS.**
   Following the restored 0099 key-test temporary boot, the user explicitly
   confirmed that pressing the POCO Pad's real **volume-up button performs
