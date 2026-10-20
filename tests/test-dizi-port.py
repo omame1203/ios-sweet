@@ -42,6 +42,7 @@ def main():
     run([sys.executable, 'tests/test-dizi-smmu-dma.py'])
     run([sys.executable, 'tests/test-dizi-lcd.py'])
     run([sys.executable, 'tests/test-dizi-pmic-glink.py'])
+    run([sys.executable, 'tests/test-dizi-usb-link.py'])
     blob = ROOT / 'research/dizi-novatek-fw/novatek_ts_fw_boe.bin'
     with tempfile.TemporaryDirectory(prefix='dizi-nvt-port-') as folder:
         binary = str(Path(folder) / 'fw-test')
