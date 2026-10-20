@@ -19,6 +19,16 @@ def run(argv: list[str], cwd: pathlib.Path | None = None) -> None:
     subprocess.run(argv, cwd=cwd, check=True)
 
 
+def added_file(patch: pathlib.Path, name: str) -> str:
+    """Get the complete real XNU newly-added source (no vendor blobs needed)."""
+    section = patch.read_text().split(
+        f"diff --git a/{name} b/{name}\n", 1
+    )[1].split("diff --git ", 1)[0]
+    assert "new file mode 100644" in section
+    return "".join(line[1:] for line in section.splitlines(keepends=True)
+                   if line.startswith("+") and not line.startswith("+++"))
+
+
 def source_evidence() -> None:
     fdt_path = ROOT / "research/ipad5/dizi-live.dts"
     if not fdt_path.exists():
@@ -43,34 +53,68 @@ def source_evidence() -> None:
         r"dsi_panel_pwr_supply_sim\s*\{(.*?)\n\s*\};\n\s*dsi_panel_pwr_supply_lcd", fdt, re.S
     ).group(1)
     assert "qcom,dsi-default-panel = <0x5f5>" in fdt
-    print("lcd 0116: BOE FDT GPIO57/98, external BL, dummy panel supply verified")
+    assert "qcom,platform-bklight-en-gpio = <0x147 0x39 0x00>" in re.search(
+        r"qcom,mdss_dsi_n83_42_02_0b_wqxga_video_cphy\s*\{(.*?)"
+        r"qcom,mdss-dsi-display-timings\s*\{", fdt, re.S
+    ).group(1), "alternative CSOT panel has a different BL pin"
+    primary = re.search(r"qcom,dsi-display-primary\s*\{(.*?)\n\s*\};", fdt, re.S).group(1)
+    for supply in ("extvdd-supply = <0x4af>", "ibb-supply = <0x509>",
+                   "vci-supply = <0x2b7>", "vddio-supply = <0x4ab>"):
+        assert supply in primary, supply
+    for rail, pmic_gpio in (("display_panel_vddio", "0x09"),
+                           ("display_panel_avdd", "0x04"),
+                           ("display_panel_extvdd", "0x03")):
+        match = re.search(
+            r'display_gpio_regulator@\d+\s*\{(.*?)regulator-name = "'
+            + re.escape(rail) + r'"(.*?)\n\s*\};', fdt, re.S
+        )
+        assert match and f"gpio = <0x4aa {pmic_gpio} 0x00>" in match.group(2)
+    print("lcd 0116: BOE/CSOT FDT GPIO57/98, dummy entry and display rails verified")
 
 
 def main() -> None:
     source_evidence()
     assert PATCH.exists() and PORTABLE.exists() and TEST.exists()
-    assert STAGED.exists(), "Existing CI source tree needed for XNU patch apply"
     with tempfile.TemporaryDirectory(prefix="dizi-lcd-0116-") as dirname:
         base = pathlib.Path(dirname)
-        for rel in (
-            "iokit/Kernel/arm/SweetFramebuffer.cpp",
-            "bsd/dev/sweet_lcd.c", "bsd/dev/sweet_lcd.h",
-        ):
-            dest = base / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(STAGED / rel, dest)
+        if STAGED.exists():
+            for rel in (
+                "iokit/Kernel/arm/SweetFramebuffer.cpp",
+                "bsd/dev/sweet_lcd.c", "bsd/dev/sweet_lcd.h",
+            ):
+                dest = base / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(STAGED / rel, dest)
+            run(["git", "apply", "--check", str(PATCH)], cwd=base)
+            run(["git", "apply", str(PATCH)], cwd=base)
+            run(["git", "apply", "-R", "--check", str(PATCH)], cwd=base)
+            cpp = (base / "iokit/Kernel/arm/SweetFramebuffer.cpp").read_text()
+            print("lcd 0116: XNU 0109->0116 patch applies")
+        else:
+            # Clean git archive CI has no ignored vendor/CI0106 tree. Check
+            # the actual two added 0103 sources and the 0116 patch additions.
+            for name in ("bsd/dev/sweet_lcd.c", "bsd/dev/sweet_lcd.h"):
+                dest = base / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(added_file(ROOT / "xnu/patches/0103-dizi-lcd-power.patch", name))
+            dest = base / "bsd/dev/sweet_lcd_owner_0116.h"
+            dest.write_text(added_file(PATCH, "bsd/dev/sweet_lcd_owner_0116.h"))
+            cpp = PATCH.read_text()
+            print("lcd 0116: isolated patch-source check (no ignored CI XNU tree)")
 
-        run(["git", "apply", "--check", str(PATCH)], cwd=base)
-        run(["git", "apply", str(PATCH)], cwd=base)
         xnu_header = base / "bsd/dev/sweet_lcd_owner_0116.h"
         assert xnu_header.read_bytes() == PORTABLE.read_bytes(), "XNU/host header drift"
-        cpp = (base / "iokit/Kernel/arm/SweetFramebuffer.cpp").read_text()
         assert "dizi_lcd_owner_0116_black_frame_done(" in cpp
         assert "dizi_lcd_owner_0116_request(" in cpp
         assert cpp.count("&fb->fDiziLCDOwner, generation, NULL, NULL") == 1
         assert cpp.count("&fFB->fDiziLCDOwner, off, NULL, NULL") == 1
         assert "DiziLCDPhysicalBacklightAvailable\", kOSBooleanFalse" in cpp
-        assert "fFB->fFadeEpoch++" in cpp
+        if STAGED.exists():
+            assert "fFB->fFadeEpoch++" in cpp
+        else:
+            assert "fFB->fFadeEpoch++" in (
+                ROOT / "xnu/patches/0109-dizi-lcd-generation-race.patch"
+            ).read_text()
 
         exe = base / "test-0116"
         clang = shutil.which("clang")
@@ -109,7 +153,7 @@ def main() -> None:
              "-std=c++17", "-Wall", "-Wextra", "-Werror",
              "-I", str(base / "bsd/dev"), "-c", str(cpp_bridge),
              "-o", str(base / "bridge_0116_cpp.arm64.o")])
-    print("lcd 0116: patch applies, XNU hook guarded, ASan/UBSan and ARM64 Mach-O pass")
+    print("lcd 0116: guarded XNU hook, ASan/UBSan and ARM64 Mach-O pass")
 
 
 if __name__ == "__main__":
