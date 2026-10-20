@@ -11,8 +11,8 @@ case "$BOARD" in
 	dizi) OUT=out/dizi; BOARD_FLAGS=-DBOARD_DIZI ;;
 	*) echo "Unsupported BOARD: $BOARD" >&2; exit 1 ;;
 esac
-if [ "$BOARD" = dizi ] && [ "${DIZI_USB_DIAG:-0}" = 1 ]; then
-	# Opt in only after verifying DWC3's inherited SMMU/DMA mapping.
+if [ "$BOARD" = dizi ] && [ "${DIZI_USB_DIAG:-1}" = 1 ]; then
+	# Live EP0 boot log over USB. DIZI_USB_DIAG=0 builds without the DMA path.
 	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_USB_DIAG"
 fi
 mkdir -p "$OUT"
@@ -51,7 +51,9 @@ mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
 	--os_version 17.0.0 --os_patch_level 2035-06 \
 	--cmdline "console=null" -o out/shim-boot.img
 fi
-# Host render of the console layout.
+# Host checks: console layout and the EP0 protocol decoder.
 gcc -O1 -Wall $BOARD_FLAGS -o "$OUT/host_test" console.c bootlog.c host_test.c
 "$OUT/host_test"
+gcc -O1 -Wall -Wextra -o "$OUT/usb_control_test" usb_control_test.c usb_control.c
+"$OUT/usb_control_test"
 ls -l "$OUT/Image" "$OUT/shim-boot.img"

@@ -143,3 +143,16 @@ void mmu_disable(const struct mmu_info *info)
 	wsr("sctlr_el1", info->sctlr_before);
 	__asm__ volatile("isb; tlbi vmalle1; dsb sy; isb" ::: "memory");
 }
+
+/* ABL on dizi hands us its own stage-1 MMU tables (M=1, C=1), so restoring
+ * SCTLR is not enough for DMA. Cacheable writes to the ramoops ring would
+ * also be lost on the warm reset. Drop to the architecturally uncached,
+ * identity-addressed state; callers must flush non-image buffers first. */
+void mmu_off(void)
+{
+	uint64_t sctlr = rsr("sctlr_el1");
+	uint64_t off = sctlr & ~(SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_A | SCTLR_WXN);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+	wsr("sctlr_el1", off);
+	__asm__ volatile("isb; tlbi vmalle1; dsb sy; isb" ::: "memory");
+}

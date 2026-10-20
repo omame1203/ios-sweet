@@ -13,6 +13,9 @@ Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
 - 実機FDTに照合できる `boards/dizi.json`。GIC・タイマー・CPU構成・RAM配置を分離。
 - boot image v4形式のdizi用shim。既存のvendor_bootを使用。
 - vendor ramdiskが先頭に付く場合にも対応したXNUローダーと境界検査。
+- shimの起動ログをUSB EP0でライブ配信する診断transport（1209:0001）。
+  ホスト側 `tools/dizi-usb-log.py` がリングを読み、`tools/dizi-diag.py` が
+  一時ブートから回収までを自動化。
 - 起動時の画面情報を使うXNU初期コンソール、diziのプラットフォーム照合パッチ0082。
 - Apple配布のiPadOS 16.7.16（20H392、iPad6,11）から作成した16GBのルートイメージとADT生成。
   実機の `/product` 情報を読み、1536×2048のiPad画面を1600×2560のパネル中央に置く設定。
@@ -24,8 +27,12 @@ Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
   仮想タイマー終了時の `CNTP_CTL_EL0` 例外も、使用していない物理タイマーへのアクセスを除いて解消しました。
 - 診断05の実機写真で、**仮想タイマー割り込み30回、SGI割り込み10回、その他の割り込み0回**、
   16KB MMU初期化 `rc=0`、イメージ・フレームバッファの変換検査、診断終了を確認。
-  USB DMAは安全のため既定で無効にしており、実機でのUSB動作は未確認です。
   写真の数値・対応する一時起動イメージのハッシュは `NOTES.md` に記録。
+- 診断shimのUSB診断を実機で確認。ホストが1209:0001をHSで列挙し、
+  ディスクリプタ取得・SET_ADDRESS・SET_CONFIGURATIONの後、
+  EP0経由で3,605バイトの起動ログを回収しました。ABLはstage-1 MMUを
+  有効なまま渡すため、USB前にM/C/Iを明示的に落としています。ログと
+  イメージのSHA-256は `NOTES.md` に記録。Androidへは自動で復帰します。
 - ブートとvendor_bootの両スロットは一時起動前後でハッシュ一致。
 - ローダー実装をASan・UBSan付きで検査。64種類の先頭オフセット、BSS・ADT・起動引数のコピー、
   不正なサイズ・オフセットの拒否を確認。
@@ -43,6 +50,7 @@ python3 tools/check-dizi-board.py backup/dizi/fdt
 BOARD=dizi bash shim/build.sh
 python3 tools/mkadt.py shim/out/dizi/dizi-ipad5.adt --board dizi
 python3 tools/validate-repo.py
+python3 tools/dizi-diag.py --out logs/dizi-diag.txt   # 一時ブート→USB回収→Android復帰
 ```
 
 機種情報の抽出元は `research/ipad5/j71sap.adt` です。Apple配布IPSWから取り出した実ファイルが必要です。

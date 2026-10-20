@@ -11,6 +11,42 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 USB diagnostics now work on the dizi temporary boot.** A
+  `fastboot boot` image exposes a vendor EP0 device (1209:0001) that streams
+  the live shim log; `tools/dizi-diag.py --out logs/diag-10-usb.txt` automates
+  reboot-to-bootloader, boot, capture, Android return and a pstore attempt.
+  Root causes found on the way:
+  - ABL enters the shim with its own stage-1 MMU enabled (observed SCTLR
+    `0x30D0180D`); the old USB gate skipped on C=1 and `mmu_disable()`
+    restored ABL's SCTLR. New `mmu_off()` flushes the ramoops ring and clears
+    M/C/I; the USB gate now checks only M. Observed post state
+    `0x30D00808` before USB.
+  - DWC3 EP0 now follows sweet's proven state machine: no SETUP re-arm on a
+    bus reset (the old re-arm made the EP command fail, `failed=1`), INIT
+    action on DEPCFG and maxpacket 64 after connect. The GCC power/clock
+    probe is advisory; ABL leaves the block usable (`gdsc=F822F000`).
+  - EP0 protocol: 0x52 returns {magic 'POLG', total, oldest, 0}; 0x51 takes
+    an offset split over wValue/wIndex and returns up to 63 live ring bytes;
+    0x53 asks the shim to stop and reset. Host reads with libusb (root
+    needed on this PC; the automation uses `sudo -n`).
+  - Verified by the automated run: descriptors, SET_ADDRESS 5,
+    SET_CONFIGURATION, 28 chunk reads, **3605 bytes** captured; host saw a
+    high-speed device. Log SHA-256
+    `25763c3cf562ef2d19e38c15c36ac511a76ead3d1426877ba76241f124024c42`.
+    Boot image SHA-256
+    `8f662931587f65149b5d6d4339347526bc2aeac7bc351463c04be47ed0684bd2`;
+    its `Image` is `40cffdeb321995ec1d67c3218838c1a995593e7c1e19c0c863d870af4fb17db8`.
+    The device returned to rooted Android; only `fastboot boot` was used.
+  - The captured log confirms VTIMER 30/SGI 10, 16K MMU `rc=0`, USB DMA at
+    `0xA8020000`, ABL's event ring at `0xFBB90000`, and DWC3 speed 0.
+  - ramoops: the console zone is `0x80d80000` (two 256 KiB dmesg records come
+    first). Even with uncached writes and a valid persistent_ram header,
+    Android prints no "found existing buffer" and `/sys/fs/pstore` stays
+    empty. This is consistent with ABL clearing ramoops, but that is a guess;
+    USB is the primary channel and pstore remains a best-effort fallback.
+  - GitHub CLI is still unauthenticated, so no CI kernel build was run. A
+    complete XNU link and native iPadOS boot remain the next objective.
+
 - **2026-10-20 resumed after the prior pause, diagnostic boot 05**: the user
   explicitly asked to continue. Preserved all partitions and existing changes.
   In `shim/shim.c`, the dizi build excludes CNTP register operations in the

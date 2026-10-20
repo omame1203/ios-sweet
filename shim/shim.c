@@ -192,7 +192,11 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 		con_hex2("GIC", "iidr=", gic_state.dist_iidr, "waker=", gic_state.waker);
 		con_hex2("GIC pre", "grp=", gic_state.group, "pri=", gic_state.priority);
 	}
+#ifdef BOARD_DIZI
+	reset(80);	/* keep panic timing distinct from USB branch markers */
+#else
 	reset(40);
+#endif
 }
 
 /* ---- SMP ---- */
@@ -474,15 +478,23 @@ void shim_main(uint64_t dtb)
 		con_hex("PAR img", mmu_probe((uintptr_t)shim_main));
 		con_hex("PAR fb", mmu_probe(FB_PHYS));
 		if (dizi_rc == 0) mmu_disable(&mi);
+		/* ABL may leave its own MMU on. Flush the ramoops ring while its
+		 * mapping is still valid, then run the DMA path uncached. */
+		bootlog_sync();
+		mmu_off();
+		con_hex("SCTLR post", rsr("sctlr_el1"));
 	}
 	stage = "dizi USB diagnostic";
+	int usb_rc = 0;
 #ifdef DIZI_USB_DIAG
-	usb_diag_run(20000);
+	usb_rc = usb_diag_run(120000);
 #else
-	con_str("USB", "DMA diagnostic disabled by default");
+	con_str("USB", "DMA diagnostic disabled at build time");
 #endif
-	con_str("PROBE", "diagnostics finished; Android reboot in 20s");
-	reset(20);
+	con_hex("USB rc", usb_rc);
+	con_str("PROBE", "diagnostics finished");
+	/* Remote branch marker: 20 s on success, 25..50 s for early exits. */
+	reset(usb_rc ? 20 + 5 * usb_rc : 20);
 #endif
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */

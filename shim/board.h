@@ -12,9 +12,11 @@
 #define BOARD_GICR 0x17260000UL
 #define BOARD_VTIMER_INTID 27
 #define BOARD_PTIMER_INTID 30
-/* ramoops: 2 MiB total - 512 KiB console - 1 MiB pmsg = 512 KiB dump. */
+/* ramoops@80D00000: two 256 KiB dmesg records, then the 512 KiB console,
+ * then 1 MiB pmsg. The console (readable as console-ramoops-0) is here. */
 #define BOARD_LOG_BASE 0x80d80000UL
 #define BOARD_LOG_SIZE 0x80000UL
+#define BOARD_APPS_SMMU 0x15000000UL
 /* ruan-u-oss gcc-parrot.c; clock IDs agree with dizi's live USB FDT. */
 #define BOARD_USB_GCC 0x00100000UL
 #define BOARD_USB_GDSCR 0x49004
