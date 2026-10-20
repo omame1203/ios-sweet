@@ -11,6 +11,26 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 CI kernel build dispatched (in progress).** GitHub login is
+  `omame1203`; `dipa-studio/ios-sweet` is read-only, so the branch was pushed
+  to the new public fork `omame1203/ios-sweet` and its `main` was
+  fast-forwarded to `bcf5194` (the `pocopad-dizi` content, including 0084).
+  `workflow_dispatch` run **39409584712** (DEVELOPMENT / SWEET /
+  keep_going=true) started at 10:40Z; monitor with
+  `gh run watch 39409584712 -R omame1203/ios-sweet`. The artifact is
+  `xnu-kernel`; download to `xnu/out-0084`. No hardware action yet.
+- A 16 MiB case-sensitive HFS+ RAM-disk image was created at
+  `/tmp/dizi-test-root.img` (host-only, `fsck.hfsplus` clean). Once the
+  kernel exists the planned first test is:
+  `mkpayload.py <kernel> shim/out/dizi/dizi-ipad5.adt payload-test.bin
+  --ramdisk /tmp/dizi-test-root.img --cmdline 'debug=0xc cpus=1 keepsyms=1
+  -enable_kprintf_spam -noprogress rd=md0 wdt=-1 wdt_test=no_user_checkin
+  sweetusb=0 sweetkeys=0 sweettouch=0 sweetlog=0 ufsrw=0'`, then
+  `BOARD=dizi bash shim/build.sh payload-test.bin` and a temporary
+  `fastboot boot`. This writes no partition and no userdata. Expect the
+  early framebuffer console only: the XNU USB probe is called from
+  `sweet_ufs.c`, so a `rd=md0` boot does not start kernel USB.
+
 - **2026-10-20 USB diagnostics now work on the dizi temporary boot.** A
   `fastboot boot` image exposes a vendor EP0 device (1209:0001) that streams
   the live shim log; `tools/dizi-diag.py --out logs/diag-10-usb.txt` automates
