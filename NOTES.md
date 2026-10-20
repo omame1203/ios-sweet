@@ -11,6 +11,34 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **UFS root cause isolated and corrected in the bare-metal probe**
+  (2026-10-20): `logs/ufs-lun-probe-01.txt` captures inline sense
+  `02/04/02` (NOT READY, initializing command required) on enabled LUNs
+  0..5; LUNs 6/7 give `05/25/00` (unsupported logical unit). No low-DMA
+  GPT read succeeded before activation, so this was not just XNU's DMA.
+- `DIZI_UFS_DIAG=1 DIZI_UFS_WAKE=1 BOARD=dizi bash shim/build.sh`
+  temporarily booted image SHA-256
+  `d050ec27172fd88ab7aab71578deb7cd5ef492f15f76bbe810d9ec976f6d7542`.
+  `logs/ufs-wake-probe-02.txt` is a successful USB-captured hardware log:
+  START STOP UNIT `1b 00 00 00 10 00` on device WLUN `0xd0` returned
+  OCS=0/status=0, then LUN0 READ CAPACITY and READ(10) GPT succeeded.
+  LUN0 last LBA `0x03adefff`, block size 4096. `userdata` first block
+  `0x35a228`, 0x20000 MiB (128 GiB), filesystem signature **HFSX** read
+  from its actual superblock. ESP and Windows partitions still present.
+  This verifies the flashed root's signature only, not an HFS mount or
+  real launchd. No logical-block write command exists in the shim probe.
+- **0097 ports the verified fix to native XNU**: with `dizihw=1`, request
+  ACTIVE via the device WLUN after taking over UTRL and before TUR/GPT.
+  Ordinary LUN restored on all returns; activation failure stops init;
+  partition bounds/write authorization logic is unchanged. Shim UFS diag
+  and wake remain optional build flags, both disabled by default.
+  Next: finish current 0096 CI, build 0097, temporary native boot using
+  the actual iPadOS root, observe mount/launchd and any next failure.
+- User returned the tablet to FASTBOOT for the wake probe. The diagnostic
+  asks for reset after log capture; do not assume it returns to fastboot:
+  after probe 01 it answered neither ADB nor fastboot until manual reset.
+
+
 - **0096 full kernel build running:** CI run 39435889409, head cfe7b69,
   https://github.com/omame1203/ios-sweet/actions/runs/39435889409 .
   Exact sense decoder extracted from compiled C also passed ASan+UBSan host

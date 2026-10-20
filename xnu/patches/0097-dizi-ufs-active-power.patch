@@ -1,0 +1,36 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -352,6 +352,21 @@
+ 	return error;
+ }
+ 
++/* ABL leaves dizi's device in SLEEP: sense 02/04/02 on all enabled LUs.
++ * Linux ufshcd_set_dev_pwr_mode uses SSU on the UFS device WLUN (0xd0),
++ * with ACTIVE=1 in the power-condition field. No user blocks are written. */
++static int
++ufs_activate_device(void)
++{
++	static const uint8_t active[6] = { 0x1b, 0, 0, 0, 0x10, 0 };
++	uint8_t lun = su.lun;
++	su.lun = 0xd0;
++	int error = ufs_scsi_retry(active, sizeof(active), 0, false);
++	su.lun = lun;
++	printf("SWEET UFS: dizi device ACTIVE %s (%d)\n", error ? "failed" : "ready", error);
++	return error;
++}
++
+ /* READ(10) of count device blocks at lba into the bounce buffer. */
+ static int
+ ufs_read_blocks(uint64_t lba, uint32_t count)
+@@ -719,6 +734,11 @@
+ 
+ 	lck_mtx_lock(&sweet_ufs_lock);
+ 	error = ufs_take_over_host();
++	uint32_t dizi = 0;
++	PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
++	if (!error && dizi) {
++		error = ufs_activate_device();
++	}
+ 	if (!error) {
+ 		static const uint8_t tur[6] = { 0x00 };
+ 		/* A unit attention here must not hide a readable GPT. */

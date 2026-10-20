@@ -13,7 +13,7 @@
 #include "console.h"
 #include "ufs.h"
 
-#define UFS_BASE	0x01d84000UL	/* ufshc@1d84000, sweet live FDT */
+#define UFS_BASE	0x01d84000UL	/* ufshc@1d84000, sweet and dizi live FDT */
 
 #define REG_CAP		0x00
 #define REG_VER		0x08
@@ -32,8 +32,16 @@
 
 #define BLOCK		4096u
 
-static inline uint32_t ufs_rd(uint32_t off) { return *(volatile uint32_t *)(UFS_BASE + off); }
-static inline void ufs_wr(uint32_t off, uint32_t v) { *(volatile uint32_t *)(UFS_BASE + off) = v; }
+static inline uint32_t ufs_rd(uint32_t off)
+{
+	uint32_t v;
+	__asm__ volatile("ldr %w0, [%1]" : "=r"(v) : "r"(UFS_BASE + off) : "memory");
+	return v;
+}
+static inline void ufs_wr(uint32_t off, uint32_t v)
+{
+	__asm__ volatile("str %w0, [%1]" : : "r"(v), "r"(UFS_BASE + off) : "memory");
+}
 
 /* UTP transfer request descriptor (32 bytes). */
 struct utrd {
@@ -59,6 +67,7 @@ struct ucd {
 static struct utrd utrl[32] __attribute__((aligned(1024)));
 static struct ucd ucd __attribute__((aligned(128)));
 static uint8_t data[2 * BLOCK] __attribute__((aligned(4096)));
+static uint8_t selected_lun;
 
 static uint64_t ticks(void)
 {
@@ -132,6 +141,17 @@ static uint32_t scsi(uint8_t lun, const uint8_t *cdb, unsigned cdb_len, void *bu
 		return 2;
 	if (ucd.resp[0] != 0x21)		/* RESPONSE UPIU */
 		return 3;
+	if (*status_out) {
+		con_hex2("UFS error", "lun/cmd=", (lun << 8) | cdb[0], "resp/st=", (ucd.resp[6] << 8) | *status_out);
+		unsigned seg = ((unsigned)ucd.resp[10] << 8) | ucd.resp[11];
+		unsigned n = ((unsigned)ucd.resp[32] << 8) | ucd.resp[33];
+		con_hex2("UFS sense", "len=", n, "seg=", seg);
+		const uint8_t *s = ucd.resp + 34;
+		if (n >= 14 && seg >= 16 && ((s[0] & 0x7e) == 0x70))
+			con_hex2("UFS sense", "key=", s[2] & 15, "asc/q=", (s[12] << 8) | s[13]);
+		else if (n >= 4 && seg >= 6 && ((s[0] & 0x7e) == 0x72))
+			con_hex2("UFS sense", "key=", s[1] & 15, "asc/q=", (s[2] << 8) | s[3]);
+	}
 	return *status_out ? 4 : 0;
 }
 
@@ -139,7 +159,7 @@ static uint32_t read_blocks(uint32_t lba, uint32_t count, void *buf)
 {
 	uint8_t cdb[10] = { 0x28, 0, lba >> 24, lba >> 16, lba >> 8, lba, 0, count >> 8, count, 0 };
 	uint32_t ocs, st;
-	return scsi(0, cdb, sizeof(cdb), buf, count * BLOCK, &ocs, &st);
+	return scsi(selected_lun, cdb, sizeof(cdb), buf, count * BLOCK, &ocs, &st);
 }
 
 static uint64_t le64(const uint8_t *p)
@@ -150,12 +170,22 @@ static uint64_t le64(const uint8_t *p)
 	return v;
 }
 
+static int name_is(const char *a, const char *b)
+{
+	while (*a && *a == *b) { a++; b++; }
+	return *a == *b;
+}
+
 /* Name the filesystem whose superblock starts at block lba (f2fs/ext4). */
 static const char *fs_type(uint32_t lba)
 {
 	if (read_blocks(lba, 1, data))
 		return "read error";
 	const uint8_t *sb = data + 1024;
+	if (sb[0] == 'H' && sb[1] == 'X')
+		return "HFSX";
+	if (sb[0] == 'H' && sb[1] == '+')
+		return "HFS+";
 	if (sb[0] == 0x10 && sb[1] == 0x20 && sb[2] == 0xf5 && sb[3] == 0xf2)
 		return "f2fs";
 	if (sb[56] == 0x53 && sb[57] == 0xef)
@@ -186,8 +216,7 @@ static void list_partitions(uint32_t entry_lba, uint32_t nent)
 		if (((last - first + 1) >> 8) < 64)	/* keep the screen to the big ones */
 			continue;
 		con_hex2(name, "lba=", (uint32_t)first, "MiB=", (uint32_t)((last - first + 1) >> 8));
-		if (!__builtin_strcmp(name, "userdata") || !__builtin_strcmp(name, "cust") ||
-		    !__builtin_strcmp(name, "cache"))
+		if (name_is(name, "userdata") || name_is(name, "cust") || name_is(name, "cache"))
 			con_str(" fs", fs_type((uint32_t)first));
 	}
 }
@@ -229,6 +258,41 @@ void test_ufs(void)
 	}
 
 	uint32_t ocs = 0, st = 0, rc;
+#ifdef DIZI_UFS_DIAG
+	/* Discover the eight ordinary LUNs. Activation below requires an
+	 * additional opt-in flag; no storage writes or controller/PHY resets. */
+#ifdef DIZI_UFS_WAKE
+	/* Probe 01 measured NOT READY / 04/02 on LUNs 0..5. As in Linux
+	 * ufshcd_set_dev_pwr_mode, request ACTIVE on the UFS device WLUN.
+	 * This changes power state only, never logical-block contents. */
+	static const uint8_t active[6] = { 0x1b, 0, 0, 0, 0x10, 0 };
+	for (unsigned i = 0; i < 3; i++) {
+		rc = scsi(0xd0, active, sizeof(active), 0, 0, &ocs, &st);
+		con_hex2("UFS active", "rc=", rc, "ocs/st=", (ocs << 8) | st);
+		if (!rc) break;
+	}
+#endif
+	for (selected_lun = 0; selected_lun < 8; selected_lun++) {
+		static const uint8_t cap[10] = { 0x25 };
+		for (unsigned i = 0; i < 3; i++) {
+			rc = scsi(selected_lun, cap, sizeof(cap), data, 8, &ocs, &st);
+			if (!rc || (ucd.resp[36] & 15) != 6) break;
+		}
+		con_hex2("UFS scan", "lun=", selected_lun, "rc=", rc);
+		if (rc) continue;
+		con_hex2("UFS size", "last=", be32(data), "block=", be32(data + 4));
+		if (be32(data + 4) != BLOCK) continue;
+		if (!read_blocks(1, 1, data) && !__builtin_memcmp(data, "EFI PART", 8)) {
+			con_hex("UFS GPT lun", selected_lun);
+			uint32_t n = (uint32_t)le64(data + 80) & 0xffffffff;
+			uint32_t esz = (uint32_t)(le64(data + 80) >> 32);
+			uint64_t elba = le64(data + 72);
+			if (n && n <= 128 && esz == 128 && elba <= 0xffffffff)
+				list_partitions((uint32_t)elba, n);
+		}
+	}
+	return;
+#endif
 	static const uint8_t tur[6] = { 0x00 };
 	/* A first command may report a unit attention; retry a few times. */
 	for (int i = 0; i < 3; i++) {

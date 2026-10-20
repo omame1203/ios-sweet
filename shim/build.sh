@@ -15,6 +15,12 @@ if [ "$BOARD" = dizi ] && [ "${DIZI_USB_DIAG:-1}" = 1 ]; then
 	# Live EP0 boot log over USB. DIZI_USB_DIAG=0 builds without the DMA path.
 	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_USB_DIAG"
 fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_UFS_DIAG:-0}" = 1 ]; then
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_UFS_DIAG"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_UFS_WAKE:-0}" = 1 ]; then
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_UFS_WAKE"
+fi
 mkdir -p "$OUT"
 objects=()
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c bootlog.c usb_control.c usb_diag.c; do

@@ -484,6 +484,12 @@ void shim_main(uint64_t dtb)
 		mmu_off();
 		con_hex("SCTLR post", rsr("sctlr_el1"));
 	}
+#ifdef DIZI_UFS_DIAG
+	/* The live dizi FDT confirms the same UFSHCI resource. Optional,
+	 * no-payload diagnostic only; this probe contains no storage writes. */
+	stage = "dizi read-only UFS diagnostic";
+	test_ufs();
+#endif
 	stage = "dizi USB diagnostic";
 	int usb_rc = 0;
 #ifdef DIZI_USB_DIAG
