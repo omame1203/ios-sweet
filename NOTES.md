@@ -36,7 +36,7 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   photograph** (PXL_20261020_095955651.jpg) documenting the following:
   `LOADER no SWEETXNU payload` (expected for empty diagnostic ramdisk),
   `GICD was=000000D0 now=000000D3`, redistributor `17260000` awake,
-  `PRIORITY now=A0A0A0A0`, `ENABLE now=08000002`,
+  `PRIORITY now=A0A0A0A0`, `ENABLE now=0B000002`,
   `ICC grpen1=00000001`, `VTIMER irqs=0000001E other=00000000`
   (30 expected virtual-timer interrupts), with last INTID `0000001B`
   (=27), and `SGI1 irqs=0000000A other=00000000` (10 expected SGIs).
