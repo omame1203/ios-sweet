@@ -1,0 +1,177 @@
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -7,6 +7,9 @@
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+ #include <sys/systm.h>
++#include <sys/sysctl.h>
++#include <sys/errno.h>
++#include <kern/locks.h>
+ #include <kern/clock.h>
+ #include <kern/thread.h>
+ #include <kern/sched_prim.h>
+@@ -31,6 +34,22 @@
+ static int keys_home;
+ static uint16_t keys_pon_rt = KEYS_PON_RT, keys_gpio_rt = KEYS_GPIO_RT;
+ static int keys_sleep_chan;
++
++/* PMK8350 SID0, peripheral 0x61 (SPMI PPID 0x061); live dizi FDT
++ * rtc@6100; vendor rtc-pm8xxx.c pmk8350_regs: CTRL 0x6146,
++ * little-endian READ_TIME 0x6148..0x614b. This RTC is never written.
++ * Uses one v7 observer APID distinct from the PON and GPIO APIDs. */
++#define DIZI_RTC_PPID          0x061u
++#define DIZI_RTC_CTRL          0x6146u
++#define DIZI_RTC_READ          0x6148u
++#define DIZI_RTC_ENABLE        0x80u
++#define DIZI_RTC_MIN_SECONDS   1577836800u  /* 2020-01-01 UTC */
++#define DIZI_RTC_MAX_SECONDS   4102444800u  /* 2100-01-01 UTC, exclusive */
++#define DIZI_RTC_ATTEMPTS      5u
++static uint16_t dizi_rtc_apid = KEYS_NO_APID;
++static bool dizi_rtc_ready;
++static LCK_GRP_DECLARE(dizi_rtc_lock_group, "dizi rtc observer");
++static LCK_MTX_DECLARE(dizi_rtc_lock, &dizi_rtc_lock_group);
+ 
+ static uint32_t
+ keys_rd(vm_offset_t base, uint32_t off)
+@@ -82,6 +101,90 @@
+ 	}
+ 	return false;
+ }
++
++/* DIZI_RTC_TEST_BEGIN: host tests extract these exact parser routines. */
++static uint32_t
++dizi_rtc_decode(const uint8_t b[4])
++{
++    return (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
++        ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
++}
++
++static bool
++dizi_rtc_valid_pair(uint32_t first, uint32_t second)
++{
++    /* Reject unset/out-of-policy clocks and all large/backward jumps.
++     * This is NOT proof that an RTC ticks or is synchronized to real UTC. */
++    return first >= DIZI_RTC_MIN_SECONDS && second < DIZI_RTC_MAX_SECONDS &&
++        second >= first && second - first <= 1u;
++}
++/* DIZI_RTC_TEST_END */
++
++/* Observe only. Re-reading LSB after the four individual EXT_READL requests
++ * rejects a carry while building the word. Then acquire a second complete
++ * snapshot; accept only identical or +1 second in the bounded sequence.
++ * A failure does not update the XNU calendar or create synthetic dates. */
++static bool
++dizi_rtc_read_image(uint32_t *out)
++{
++    uint8_t bytes[4], low;
++    for (unsigned i = 0; i < 4; i++) {
++        if (!keys_read(dizi_rtc_apid, DIZI_RTC_READ + (uint16_t)i, &bytes[i]))
++            return false;
++    }
++    if (!keys_read(dizi_rtc_apid, DIZI_RTC_READ, &low) || low != bytes[0])
++        return false;
++    *out = dizi_rtc_decode(bytes);
++    return true;
++}
++
++static bool
++dizi_rtc_sample(uint32_t *out)
++{
++    uint8_t control;
++    if (!keys_read(dizi_rtc_apid, DIZI_RTC_CTRL, &control) ||
++        !(control & DIZI_RTC_ENABLE))
++        return false;
++    for (unsigned attempt = 0; attempt < DIZI_RTC_ATTEMPTS; ++attempt) {
++        uint32_t first = 0, second = 0;
++        if (!dizi_rtc_read_image(&first) || !dizi_rtc_read_image(&second))
++            continue;
++        if (!dizi_rtc_valid_pair(first, second))
++            continue;
++        *out = second;
++        return true;
++    }
++    return false;
++}
++
++/* Explicitly opt in: dizihw=1 dizirtc=1. Exposes fresh seconds to userland:
++ * sysctlbyname("kern.dizirtc_seconds", &uint64, &len, NULL, 0).
++ * A plausible counter value alone is NOT proof of calibrated UTC or ticking.
++ * No call to clock_set_calendar_microtime/PEGetUTCTimeOfDay/settimeofday:
++ * current physical RTC state has not been measured, so we cannot choose
++ * an authoritative wall clock source automatically. */
++static int
++sysctl_dizi_rtc_seconds SYSCTL_HANDLER_ARGS
++{
++    uint32_t seconds = 0;
++    uint64_t observed = 0;
++    if (req->newptr != USER_ADDR_NULL)
++        return EPERM;
++    if (!dizi_rtc_ready)
++        return ENXIO;
++    lck_mtx_lock(&dizi_rtc_lock);
++    bool ok = dizi_rtc_sample(&seconds);
++    lck_mtx_unlock(&dizi_rtc_lock);
++    if (!ok)
++        return EIO;
++    observed = seconds;
++    return sysctl_handle_quad(oidp, &observed, 0, req);
++}
++
++SYSCTL_PROC(_kern, OID_AUTO, dizirtc_seconds,
++    CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
++    0, 0, sysctl_dizi_rtc_seconds, "Q",
++    "Dizi PMK8350 RTC counter, epoch seconds (unsynchronized; read-only)");
+ 
+ static void
+ keys_wait(void)
+@@ -135,13 +238,15 @@
+ 	}
+ 	keys_started = true;
+ 	(void)PE_parse_boot_argn("sweetkeys", &enabled, sizeof(enabled));
+-	if (!enabled) {
+-		printf("SWEET KEYS: disabled (sweetkeys=0)\n");
+-		return;
+-	}
+-	int dizi = 0;
++	int dizi = 0, rtc_requested = 0;
+ 	PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
+ 	keys_dizi = dizi != 0;
++	PE_parse_boot_argn("dizirtc", &rtc_requested, sizeof(rtc_requested));
++	bool rtc = keys_dizi && rtc_requested == 1;
++	if (!enabled && !rtc) {
++		printf("SWEET KEYS: disabled (sweetkeys=0); RTC disabled\n");
++		return;
++	}
+ 	PE_parse_boot_argn("dizihomekey", &keys_home, sizeof(keys_home));
+ 	/* Dizi live FDT + MiCode's v7 arbiter/GEN3 PON/GPIO1 definitions.
+ 	 * GPIO specifier 1 is one-based: PM6450 GPIO1 is 0x8800, not 0x8900.
+@@ -162,6 +267,29 @@
+ 	if (!version_ok || count == 0 || count > (keys_dizi ? 1024u : 512u)) {
+ 		printf("SWEET KEYS: unsupported arbiter version=%#x apids=%u\n",
+ 		    keys_version, count);
++		return;
++	}
++	if (rtc) {
++		/* Only an apps-owned, exact SID0 RTC mapping may be observed. */
++		uint16_t apid = keys_find_apid(DIZI_RTC_PPID, count);
++		if (apid != KEYS_NO_APID &&
++		    (keys_rd(keys_cnfg, 4u * apid) & 7u) == 0u) {
++			dizi_rtc_apid = apid;
++			dizi_rtc_ready = true;
++			uint32_t seconds = 0;
++			lck_mtx_lock(&dizi_rtc_lock);
++			bool ok = dizi_rtc_sample(&seconds);
++			lck_mtx_unlock(&dizi_rtc_lock);
++			if (ok)
++				printf("DIZI RTC: observed counter=%u epoch-seconds (unsynchronized; system clock unchanged)\n", seconds);
++			else
++				printf("DIZI RTC: initial read invalid/off; sysctl retries on demand\n");
++		} else {
++			printf("DIZI RTC: no apps-owned PPID 0x061; disabled\n");
++		}
++	}
++	if (!enabled) {
++		printf("SWEET KEYS: disabled (sweetkeys=0); RTC observer only\n");
+ 		return;
+ 	}
+ 	keys_pon_apid = keys_find_apid(keys_dizi ? 0x013 : 0x008, count);

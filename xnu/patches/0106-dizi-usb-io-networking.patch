@@ -1,0 +1,357 @@
+diff --git a/bsd/dev/dizi_usb_link.h b/bsd/dev/dizi_usb_link.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/dizi_usb_link.h
+@@ -0,0 +1,21 @@
++/* Dizi USB ECM host-link policy, no hardware operations. */
++#ifndef DIZI_USB_LINK_H
++#define DIZI_USB_LINK_H
++#include <stdbool.h>
++#include <stdint.h>
++struct dizi_usb_link {
++    bool enabled;    /* explicit diziusbnet=1 && dizihw=1 && diziusb=1 */
++    bool attached;   /* existing BSD ue0 ifnet successfully attached */
++    bool connected;  /* a DWC3 connect-done event was received */
++    bool configured; /* host SET_CONFIGURATION(1) succeeded */
++    uint8_t alt;     /* CDC data interface SET_INTERFACE(1) */
++};
++static inline bool dizi_usb_link_ready(const struct dizi_usb_link *s) {
++    return s->enabled && s->attached && s->connected && s->configured && s->alt == 1;
++}
++static inline void dizi_usb_link_reset(struct dizi_usb_link *s) {
++    s->connected = false;
++    s->configured = false;
++    s->alt = 0;
++}
++#endif
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -36,10 +36,18 @@
+ #include <net/if_media.h>
+ #include <net/dlil.h>
+ #include <sys/kern_event.h>
++#include "dizi_usb_link.h"
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
+ static bool sweet_usb_dizi;
++/* Real BSD ue0 -> IOKit companion: dizi-only, opt-in, never a second ifnet. */
++extern bool dizi_usb_ecm_publish(const uint8_t *mac);
++extern void dizi_usb_ecm_link(bool connected);
++static struct dizi_usb_link dizi_link;
++static bool dizi_link_last_carrier;
++static bool dizi_link_carrier; /* atomically read by BSD output/IOCTL */
++static void dizi_link_refresh(void);
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ 
+@@ -102,6 +110,12 @@
+ 	PE_parse_boot_argn("sweetusb", &enabled, sizeof(enabled));
+ 	PE_parse_boot_argn("diziusb", &dizi, sizeof(dizi));
+ 	sweet_usb_dizi = dizi != 0;
++	/* Bridge only when the dizi native gadget is deliberately enabled.
++	 * SWEET's existing BSD gadget + direct link events are unchanged. */
++	int hw = 0, bridge = 0;
++	PE_parse_boot_argn("dizihw", &hw, sizeof(hw));
++	PE_parse_boot_argn("diziusbnet", &bridge, sizeof(bridge));
++	dizi_link.enabled = (dizi == 1 && hw == 1 && bridge == 1 && enabled >= 2);
+ 	if (!enabled) {
+ 		return;
+ 	}
+@@ -497,6 +511,10 @@
+ 	}
+ 	dwc_wr(DALEPENA, dwc_rd(DALEPENA) | (1u << EP_RX) | (1u << EP_TX) | (1u << EP_INT));
+ 	ud.configured = true;
++	if (dizi_link.enabled) {
++		dizi_link.configured = true;
++		dizi_link_refresh();
++	}
+ 	ud_rx_arm();
+ 	printf("SWEET USB: ECM endpoints configured\n");
+ }
+@@ -556,6 +574,14 @@
+ 	} else if (req == 9) {          /* SET_CONFIGURATION */
+ 		if (value == 1) {
+ 			ud_configure();
++		} else if (dizi_link.enabled) {
++			/* Do not pretend a torn-down host session remains online.
++			 * No hardware endpoint reset is invented here. */
++			ud.configured = false;
++			ud.data_alt = 0;
++			dizi_link.configured = false;
++			dizi_link.alt = 0;
++			dizi_link_refresh();
+ 		}
+ 		printf("SWEET USB: configured (%u)\n", value);
+ 	} else if (req == 8) {          /* GET_CONFIGURATION */
+@@ -564,10 +590,19 @@
+ 		data[0] = 0; data[1] = 0; n = 2;
+ 	} else if (req == 11) {         /* SET_INTERFACE */
+ 		if (index == 1) {
+-			ud.data_alt = (uint8_t)value;
+-			if (value == 1 && ud.configured) {
+-				ud_notify_connected();
+-				ud_link_event(true);
++			if (value > 1 && dizi_link.enabled) {
++				ok = false;
++			} else {
++				ud.data_alt = (uint8_t)value;
++				if (dizi_link.enabled) {
++					dizi_link.alt = (uint8_t)value;
++					dizi_link_refresh();
++				} else if (value == 1 && ud.configured) {
++					ud_notify_connected();
++					ud_link_event(true);
++				}
++				if (dizi_link.enabled && dizi_usb_link_ready(&dizi_link))
++					ud_notify_connected();
+ 			}
+ 		}
+ 	} else if (req == 10) {         /* GET_INTERFACE */
+@@ -610,7 +645,8 @@
+ 	ud_sync(UD_TRB_RX, 16);
+ 	uint32_t len = UD_FRAME_MAX - (t[2] & 0xffffff);
+ 	ud_sync(UD_RX, UD_FRAME_MAX);
+-	if (ud.ifp != NULL && len >= ETHER_HDR_LEN && len <= ETHER_MAX_LEN) {
++	if (ud.ifp != NULL && (!dizi_link.enabled || __atomic_load_n(&dizi_link_carrier, __ATOMIC_ACQUIRE)) &&
++	    len >= ETHER_HDR_LEN && len <= ETHER_MAX_LEN) {
+ 		/*
+ 		 * One mbuf with a 2 KiB cluster holds any frame. (mbuf_allocpacket
+ 		 * may return a first mbuf of length 0: stripping the header from
+@@ -644,7 +680,8 @@
+ static void
+ ud_tx_kick_locked(void)
+ {
+-	while (!ud.tx_busy && ud.txq_count > 0 && ud.configured) {
++	while (!ud.tx_busy && ud.txq_count > 0 && ud.configured &&
++	    (!dizi_link.enabled || __atomic_load_n(&dizi_link_carrier, __ATOMIC_ACQUIRE))) {
+ 		mbuf_t m = ud.txq[ud.txq_head];
+ 		ud.txq_head = (ud.txq_head + 1) % UD_TXQ;
+ 		ud.txq_count--;
+@@ -672,7 +709,8 @@
+ ud_if_output(ifnet_t ifp, mbuf_t m)
+ {
+ 	lck_mtx_lock(ud.lock);
+-	if (ud.txq_count == UD_TXQ || !ud.configured) {
++	if (ud.txq_count == UD_TXQ || !ud.configured ||
++	    (dizi_link.enabled && !__atomic_load_n(&dizi_link_carrier, __ATOMIC_ACQUIRE))) {
+ 		lck_mtx_unlock(ud.lock);
+ 		mbuf_freem(m);
+ 		ifnet_stat_increment_out(ifp, 0, 0, 1);
+@@ -698,6 +736,24 @@
+ 		dlil_post_msg(ud.ifp, KEV_DL_SUBCLASS, up ? KEV_DL_LINK_ON : KEV_DL_LINK_OFF, NULL, 0, FALSE);
+ 	}
+ }
++
++static void
++dizi_link_refresh(void)
++{
++	if (!dizi_link.enabled) return;
++	bool carrier = dizi_usb_link_ready(&dizi_link);
++	if (carrier == dizi_link_last_carrier) return;
++	/* Publish carrier only if BSD accepted the transition; failure must
++	 * not make IOKit/configd claim the transport is functional. */
++	if (ud.ifp == NULL ||
++	    ifnet_set_flags(ud.ifp, carrier ? IFF_RUNNING : 0, IFF_RUNNING) != 0)
++		carrier = false;
++	__atomic_store_n(&dizi_link_carrier, carrier, __ATOMIC_RELEASE);
++	dizi_link_last_carrier = carrier;
++	dizi_usb_ecm_link(carrier);
++	ud_link_event(carrier);
++}
++
+ 
+ static errno_t
+ ud_if_ioctl(ifnet_t ifp, unsigned long cmd, void *data)
+@@ -711,9 +767,10 @@
+ 		    CAST_USER_ADDR_T(((struct ifmediareq32 *)ifmr)->ifmu_ulist);
+ 		int media = IFM_ETHER | IFM_AUTO;
+ 		ifmr->ifm_current = media;
+-		ifmr->ifm_active = ud.configured ? (IFM_ETHER | IFM_1000_T | IFM_FDX) : media;
++		bool up = dizi_link.enabled ? __atomic_load_n(&dizi_link_carrier, __ATOMIC_ACQUIRE) : ud.configured;
++		ifmr->ifm_active = up ? (dizi_link.enabled ? media : (IFM_ETHER | IFM_1000_T | IFM_FDX)) : media;
+ 		ifmr->ifm_mask = 0;
+-		ifmr->ifm_status = IFM_AVALID | (ud.configured ? IFM_ACTIVE : 0);
++		ifmr->ifm_status = IFM_AVALID | (up ? IFM_ACTIVE : 0);
+ 		if (list != USER_ADDR_NULL && ifmr->ifm_count > 0) {
+ 			ifmr->ifm_count = 1;
+ 			return copyout(&media, list, sizeof(media));
+@@ -785,6 +842,13 @@
+ 		return;
+ 	}
+ 	ifnet_set_lladdr(ud.ifp, ud_phone_mac, ETHER_ADDR_LEN);
++	if (dizi_link.enabled) {
++		/* Publish ONLY after the genuine BSD Ethernet ifnet is attached.
++		 * No IONetworkingFamily interface or second DLIL registration. */
++		dizi_link.attached = true; /* ifnet_attach succeeded above */
++		if (!dizi_usb_ecm_publish(ud_phone_mac))
++			printf("SWEET USB: dizi IOKit companion unavailable; ue0 remains BSD-owned\n");
++	}
+ 
+ 	errno_t err = proto_plumb(PF_INET, ud.ifp);
+ 	socket_t so = NULL;
+@@ -810,7 +874,10 @@
+ 		err = sock_ioctl(so, SIOCAIFADDR, &ifra);
+ 		sock_close(so);
+ 	}
+-	ifnet_set_flags(ud.ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
++	/* IFNET creation is NOT carrier: host must configure ECM data alt 1.
++	 * Keep SWEET's previous flags unchanged when not using this bridge. */
++	ifnet_set_flags(ud.ifp, dizi_link.enabled ? IFF_UP : (IFF_UP | IFF_RUNNING),
++	    IFF_UP | IFF_RUNNING);
+ 	printf("SWEET USB: ue0 192.168.7.2/24 %s (err %d)\n", err ? "NOT configured" : "up", err);
+ }
+ 
+@@ -820,6 +887,12 @@
+ 	if (ev & 1) {                   /* device event */
+ 		uint32_t type = (ev >> 8) & 0xf;
+ 		if (type == 1) {        /* USB reset */
++			if (dizi_link.enabled) {
++				dizi_usb_link_reset(&dizi_link);
++				ud.configured = false;
++				ud.data_alt = 0;
++				dizi_link_refresh();
++			}
+ 			dwc_wr(DCFG, dwc_rd(DCFG) & ~(0x7fu << 3));
+ 			printf("SWEET USB: bus reset\n");
+ 		} else if (type == 2) { /* connect done */
+@@ -829,8 +902,18 @@
+ 			    (1u << 8) | (1u << 10) | (0u << 25), 0);
+ 			ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3) | (2u << 30),
+ 			    (1u << 8) | (1u << 10) | (1u << 25), 0);
++			if (dizi_link.enabled) {
++				dizi_link.connected = true;
++				dizi_link_refresh();
++			}
+ 			printf("SWEET USB: connected, speed %u\n", speed);
+ 		} else if (type == 0) {
++			if (dizi_link.enabled) {
++				dizi_usb_link_reset(&dizi_link);
++				ud.configured = false;
++				ud.data_alt = 0;
++				dizi_link_refresh();
++			}
+ 			printf("SWEET USB: disconnect\n");
+ 		}
+ 		return;
+@@ -937,7 +1020,8 @@
+ 	to.sin_addr.s_addr = htonl(0xc0a80701);         /* 192.168.7.1 */
+ 	for (;;) {
+ 		ud_sleep_ms(100);
+-		if (!ud.configured) {
++		if (!ud.configured ||
++		    (dizi_link.enabled && !__atomic_load_n(&dizi_link_carrier, __ATOMIC_ACQUIRE))) {
+ 			continue;
+ 		}
+ 		if (so == NULL && sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, NULL, &so) != 0) {
+diff --git a/iokit/Kernel/arm/DiziUSBEthernet.cpp b/iokit/Kernel/arm/DiziUSBEthernet.cpp
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/DiziUSBEthernet.cpp
+@@ -0,0 +1,78 @@
++/*
++ * Dizi USB-ECM real-ifnet IOKit companion. NO IONetworkingFamily impostor.
++ * The actual Ethernet NIC is BSD ue0, whose output/RX handlers belong to
++ * sweet_usb.c and can convey traffic only when CDC data altsetting is live.
++ *
++ * This IOService does not allocate a second ifnet, claim a Wi-Fi device,
++ * expose a fake IONetworkController subclass, or pretend that an IONetwork-
++ * Interface (not present in this XNU build) was registered. BSD provides
++ * the packet transport; this service publishes *observed* link metadata.
++ * Future full IONetworkingFamily requires its real sources and converting
++ * ue0 ownership; do not register two DLIL interfaces for one USB gadget.
++ */
++#include <pexpert/arm64/board_config.h>
++#if defined(SWEET)
++#include <IOKit/IOService.h>
++#include <IOKit/IOPlatformExpert.h>
++#include <IOKit/IOLib.h>
++#include <IOKit/IOKitKeys.h>
++
++class DiziUSBECMController final : public IOService {
++    OSDeclareDefaultStructors(DiziUSBECMController);
++public:
++    bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++    void update(bool connected);
++};
++OSDefineMetaClassAndStructors(DiziUSBECMController, IOService);
++
++static DiziUSBECMController *dizi_ecm;
++
++bool DiziUSBECMController::start(IOService *provider) {
++    if (!IOService::start(provider)) return false;
++    setName("DiziUSBECMController");
++    /* This is a concrete BSD Ethernet adapter, not a synthetic WLAN MAC. */
++    if (!setProperty("IOBSDName", "ue0") ||
++        !setProperty("DiziUSBECMUnderlyingIfnet", "ue0") ||
++        !setProperty("DiziUSBECMTransport", "CDC-ECM") ||
++        !setProperty("DiziUSBECMCarrier", kOSBooleanFalse) ||
++        !setProperty("DiziUSBECMInternetVerified", kOSBooleanFalse)) return false;
++    registerService();
++    return true;
++}
++void DiziUSBECMController::update(bool connected) {
++    /* Configured plus altsetting is only a USB-carrier indication;
++     * NOT proof of delivered Ethernet frames, gateway or Internet. */
++    setProperty("DiziUSBECMCarrier", connected ? kOSBooleanTrue : kOSBooleanFalse);
++}
++
++extern "C" bool dizi_usb_ecm_publish(const uint8_t *mac) {
++    if (dizi_ecm || mac == nullptr) return false;
++    IOPlatformExpert *provider = IOService::getPlatform();
++    if (!provider) return false;
++    DiziUSBECMController *s = new DiziUSBECMController;
++    if (!s) return false;
++    bool attached = false;
++    if (s->init()) {
++        attached = s->attach(provider);
++        if (attached) {
++            /* BOE/WLAN identity is unrelated. This is the fixed CDC-ECM
++             * device-side MAC already used by the existing BSD ifnet. */
++            if (!s->setProperty("local-mac-address", (void *)mac, 6) ||
++                !s->setProperty("IOMACAddress", (void *)mac, 6) || !s->start(provider)) {
++                s->detach(provider);
++                attached = false;
++            }
++        }
++    }
++    if (!attached) {
++        s->release();
++        return false;
++    }
++    /* Owned for kernel lifetime: BSD gadget worker has no detach path. */
++    dizi_ecm = s;
++    return true;
++}
++extern "C" void dizi_usb_ecm_link(bool connected) {
++    if (dizi_ecm) dizi_ecm->update(connected);
++}
++#endif
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -72,7 +72,11 @@
+ 	int netid = 0, dizi = 0;
+ 	PE_parse_boot_argn("sweetnetid", &netid, sizeof(netid));
+ 	PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
+-	if (netid != 0 && dizi != 0) {
++	int bridge = 0;
++	PE_parse_boot_argn("diziusbnet", &bridge, sizeof(bridge));
++	/* Never publish 0098's identity-only pseudo-controller alongside the
++	 * real-ifnet-backed dizi USB service. Existing sweet path untouched. */
++	if (netid != 0 && dizi != 0 && bridge == 0) {
+ 		IONetworkController *identity = new IONetworkController;
+ 		bool attached = false;
+ 		if (identity != NULL && identity->init()) {
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -8,6 +8,7 @@
+ 
+ # SWEET device-tree platform (empty translation unit on other boards)
+ iokit/Kernel/arm/SweetPlatformExpert.cpp                         optional iokitcpp
++iokit/Kernel/arm/DiziUSBEthernet.cpp                            optional iokitcpp
+ 
+ iokit/Kernel/arm/SweetCPU.cpp                                    optional iokitcpp
+ iokit/Kernel/arm/SweetEntitlements.cpp                           optional iokitcpp

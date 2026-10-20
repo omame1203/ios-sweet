@@ -1,0 +1,562 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -111,6 +111,7 @@
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
++bsd/dev/dizi_smmu_dma.c		standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/dizi_smmu_dma.h b/bsd/dev/dizi_smmu_dma.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/dizi_smmu_dma.h
+@@ -0,0 +1,109 @@
++/*
++ * Dizi SMMUv2 Stage-1 DMA software foundation.  No hardware access.
++ * BSD-2-Clause SPDX-License-Identifier: BSD-2-Clause
++ * The caller MUST establish exclusive device/SMR/CB ownership, domain table
++ * visibility, IRQ/TLB handling and clocks before any later MMIO integration.
++ */
++#ifndef DIZI_SMMU_DMA_H
++#define DIZI_SMMU_DMA_H
++#include <stdint.h>
++#include <stddef.h>
++#include <stdbool.h>
++
++#define DZ_SMMU_GPI_SID      0x416u
++#define DZ_SMMU_QUP_SID      0x403u
++#define DZ_SMMU_ID0         0x4c017e7eu
++#define DZ_SMMU_ID1         0x6000004du
++#define DZ_SMMU_GR0_PA       UINT64_C(0x15000000)
++#define DZ_SMMU_SMR_COUNT    120u
++#define DZ_SMMU_CB_COUNT     77u
++#define DZ_DMA_PAGE          4096u
++#define DZ_DMA_MAX_MAPS      128u
++#define DZ_DMA_MAX_TABLES    140u
++#define DZ_DMA_MAX_IOVA_PAGES (0x10000000u / DZ_DMA_PAGE)
++#define DZ_DMA_BITMAP_WORDS (DZ_DMA_MAX_IOVA_PAGES / 64u)
++
++/* Fail closed, including memory exhaustion and any ambiguous ownership. */
++enum dz_result {
++    DZ_OK = 0, DZ_INVALID = -1, DZ_NOT_READY = -2,
++    DZ_NO_SPACE = -3, DZ_CONFLICT = -4, DZ_POISONED = -5
++};
++
++enum dz_kind { DZ_GPI_RINGS = 1, DZ_QUP_PAYLOADS = 2 };
++enum dz_dma_access { DZ_DMA_READ = 1, DZ_DMA_WRITE = 2, DZ_DMA_RW = 3 };
++
++/* Allocator returns 4-KiB zero-able CPU VA and REAL SMMU-visible PA;
++ * sync must publish page table writes to device before sealing.  It MUST
++ * NOT return an IOVA as PA or assume either stream is in bypass mode. */
++struct dz_pt_ops {
++    int (*alloc)(void *ctx, uint64_t **va, uint64_t *pa);
++    void (*free)(void *ctx, uint64_t *va, uint64_t pa);
++    int (*sync)(void *ctx, const uint64_t *va, uint64_t pa);
++    void *ctx;
++};
++struct dz_table { uint64_t *va, pa; };
++struct dz_mapping { uint64_t pa; uint32_t iova, size; uint8_t access; bool active; };
++/* Must be ZERO-INITIALIZED before dz_domain_init, never reinitialized live. */
++struct dz_domain {
++    uint32_t state, id2;
++    enum dz_kind kind;
++    uint32_t base, length, pa_bits;
++    uint64_t pending_pa; /* quarantine allocator PA while building a map */
++    uint32_t pending_size;
++    struct dz_pt_ops ops;
++    struct dz_table tables[DZ_DMA_MAX_TABLES];
++    unsigned ntables;
++    struct dz_mapping maps[DZ_DMA_MAX_MAPS];
++    uint64_t occupied[DZ_DMA_BITMAP_WORDS];
++};
++
++/* Only after ID2 has been independently read: require 4K Stage-1 support,
++ * supported OAS, >=32-bit IAS; actual CB ownership is separately gated. */
++int dz_domain_init(struct dz_domain *d, enum dz_kind kind, uint32_t id0,
++                   uint32_t id1, uint32_t id2, const struct dz_pt_ops *ops);
++/* ONLY for offline/unattached domains; hardware-activated domains must be
++ * detached and TLB-synchronized by a future hardware backend FIRST. */
++void dz_domain_destroy(struct dz_domain *d);
++int dz_domain_map(struct dz_domain *d, uint64_t pa, uint32_t size,
++                  uint32_t alignment, enum dz_dma_access access,
++                  uint32_t *iova_out);
++int dz_domain_unmap(struct dz_domain *d, uint32_t iova, uint32_t size);
++int dz_domain_seal(struct dz_domain *d);
++bool dz_domain_covers(const struct dz_domain *d, uint32_t iova,
++                      uint32_t len, enum dz_dma_access access);
++
++/* All claim bits default false! They must be attested out-of-band by the
++ * SMMU owner, not inferred from SMR.VALID=0 or free context-bank-looking data.
++ * This produces a REGISTER VALUE PLAN ONLY, NOT a sequence of writes. */
++struct dz_snapshot {
++    uint32_t id0, id1, id2, scr0;
++    uint32_t smr[DZ_SMMU_SMR_COUNT];
++    /* All VALID SMR slots require known S2CR types/CBs before planning;
++     * an unobserved CB may already be serving an unrelated device. */
++    uint32_t s2cr[DZ_SMMU_SMR_COUNT];
++    bool s2cr_known[DZ_SMMU_SMR_COUNT];
++    bool slot_claimed[DZ_SMMU_SMR_COUNT];
++    bool cb_claimed[DZ_SMMU_CB_COUNT];
++    bool exclusive_hypervisor_permission;
++};
++struct dz_route {
++    uint16_t sid, smr_slot, cb_index, asid;
++    uint32_t smr_offset, s2cr_offset, cbar_offset, cba2r_offset;
++    uint32_t cb_base_offset, smr_value, s2cr_value, cbar_value, cba2r_value;
++    uint32_t tcr, tcr2, mair0;
++    uint64_t ttbr0;
++};
++struct dz_route_pair { struct dz_route gpi, qup; };
++int dz_plan_routes(const struct dz_snapshot *s, const struct dz_domain *gpi,
++                   const struct dz_domain *qup, struct dz_route_pair *out);
++
++/* Vendor-shaped 16-byte SPI/GPI DMA transfer elements; construction only.
++ * No doorbells, commands, IRQ, power, SMMU registers or TRE queueing. */
++struct dz_tre { uint32_t dword[4]; };
++int dz_gpi_check_rings(const struct dz_domain *gpi, uint32_t tx,
++                       uint32_t rx, uint32_t ev);
++int dz_gpi_spi_buffer_tre(const struct dz_domain *qup, uint32_t buf,
++                          uint32_t len, bool tx, struct dz_tre *out);
++int dz_gpi_spi_go_tre(uint32_t rx_len, struct dz_tre *out);
++
++#endif
+diff --git a/bsd/dev/dizi_smmu_dma.c b/bsd/dev/dizi_smmu_dma.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/dizi_smmu_dma.c
+@@ -0,0 +1,432 @@
++/* SPDX-License-Identifier: BSD-2-Clause */
++/* SMMUv2 dizi DMA SOFTWARE model, no MMIO or runtime hardware side effects.
++ * Software page tables MUST NOT be installed without cache, TLB, IRQ, clock,
++ * SMMU/Gunyah ownership and stream arbitration infrastructure. */
++#include "dizi_smmu_dma.h"
++#include <string.h>
++
++#define DZ_MAGIC 0x445a694fu
++#define DZ_SEALED 0x445a6950u
++#define DZ_BAD 0x445a6951u
++#define DZ_PTE_VALID_TABLE 3ull
++#define DZ_PTE_AF (1ull << 10)
++#define DZ_PTE_NG (1ull << 11)
++#define DZ_PTE_UNPRIV (1ull << 6)
++#define DZ_PTE_XN (3ull << 53)
++#define DZ_PTE_SH_INNER (3ull << 8)
++#define DZ_PTE_READ_ONLY (2ull << 6)
++#define DZ_MASK_PAGE (~UINT64_C(0xfff))
++
++static bool
++power_two(uint32_t x)
++{
++    return x && !(x & (x - 1));
++}
++
++static unsigned
++address_bits(uint32_t enc)
++{
++    static const unsigned width[] = {32, 36, 40, 42, 44, 48};
++    return enc < sizeof(width) / sizeof(width[0]) ? width[enc] : 0;
++}
++
++static bool
++fits_pa(uint64_t pa, uint64_t size, unsigned bits)
++{
++    if (bits < 32 || bits > 48 || !size) return false;
++    return pa < (UINT64_C(1) << bits) &&
++           size - 1 <= ((UINT64_C(1) << bits) - 1 - pa);
++}
++
++/* The only backing table allocator is EXPLICITLY supplied by the caller.
++ * The callback must allocate a physically contiguous, 4K aligned page. */
++static struct dz_table *
++new_table(struct dz_domain *d)
++{
++    uint64_t *va = NULL, pa = 0;
++    if (d->ntables >= DZ_DMA_MAX_TABLES ||
++        d->ops.alloc(d->ops.ctx, &va, &pa) != 0) return NULL;
++    if (!va || ((uintptr_t)va & 0xfffu) || (pa & 0xfffu) ||
++        !fits_pa(pa, DZ_DMA_PAGE, d->pa_bits)) {
++        if (va) d->ops.free(d->ops.ctx, va, pa);
++        return NULL;
++    }
++    if (d->pending_size && pa < d->pending_pa + d->pending_size &&
++        d->pending_pa < pa + DZ_DMA_PAGE) {
++        d->ops.free(d->ops.ctx, va, pa);
++        return NULL;
++    }
++    for (unsigned i = 0; i < DZ_DMA_MAX_MAPS; ++i) {
++        const struct dz_mapping *m = &d->maps[i];
++        if (m->active && pa < m->pa + m->size &&
++            m->pa < pa + DZ_DMA_PAGE) {
++            d->ops.free(d->ops.ctx, va, pa);
++            return NULL;
++        }
++    }
++    for (unsigned i = 0; i < d->ntables; ++i) {
++        if (d->tables[i].pa == pa || d->tables[i].va == va) {
++            /* Invalid allocator; never re-use/overwrite an existing table.
++             * A duplicated pointer is still owned by the earlier slot. */
++            if (d->tables[i].va != va) d->ops.free(d->ops.ctx, va, pa);
++            return NULL;
++        }
++    }
++    memset(va, 0, DZ_DMA_PAGE);
++    struct dz_table *t = &d->tables[d->ntables++];
++    t->va = va;
++    t->pa = pa;
++    return t;
++}
++
++/* Table descriptors must point only at pages returned by this domain's
++ * allocator, never at host/XNU virtual addresses. */
++static struct dz_table *
++lookup_table(struct dz_domain *d, uint64_t entry)
++{
++    if ((entry & 3u) != 3u) return NULL;
++    uint64_t pa = entry & DZ_MASK_PAGE;
++    for (unsigned i = 0; i < d->ntables; ++i)
++        if (d->tables[i].pa == pa) return &d->tables[i];
++    return NULL;
++}
++
++static struct dz_table *
++child_table(struct dz_domain *d, struct dz_table *parent, unsigned idx,
++            bool create)
++{
++    uint64_t value = parent->va[idx];
++    if (value & 1u) return lookup_table(d, value);
++    if (!create) return NULL;
++    struct dz_table *child = new_table(d);
++    if (child) parent->va[idx] = child->pa | DZ_PTE_VALID_TABLE;
++    return child;
++}
++
++static uint64_t *
++leaf_entry(struct dz_domain *d, uint32_t iova, bool create)
++{
++    /* T0SZ=32 => 32-bit IOVA, level-1 root: [31:30], L2 [29:21],
++     * L3 [20:12]. All L1/L2 descriptor types are TABLE, not blocks. */
++    struct dz_table *l2 = child_table(d, &d->tables[0],
++                                      (iova >> 30) & 0x1ffu, create);
++    if (!l2) return NULL;
++    struct dz_table *l3 = child_table(d, l2, (iova >> 21) & 0x1ffu, create);
++    if (!l3) return NULL;
++    return &l3->va[(iova >> 12) & 0x1ffu];
++}
++
++int
++dz_domain_init(struct dz_domain *d, enum dz_kind kind, uint32_t id0,
++               uint32_t id1, uint32_t id2, const struct dz_pt_ops *ops)
++{
++    if (!d || d->state || !ops || !ops->alloc || !ops->free || !ops->sync ||
++        id0 != DZ_SMMU_ID0 || id1 != DZ_SMMU_ID1 ||
++        !(id2 & (1u << 12)) || !address_bits(id2 & 0xfu) ||
++        !address_bits((id2 >> 4) & 0xfu) ||
++        (kind != DZ_GPI_RINGS && kind != DZ_QUP_PAYLOADS)) return DZ_INVALID;
++    memset(d, 0, sizeof(*d));
++    d->state = DZ_MAGIC;
++    d->kind = kind;
++    d->id2 = id2;
++    d->pa_bits = address_bits((id2 >> 4) & 0xfu);
++    d->base = kind == DZ_GPI_RINGS ? 0x00100000u : 0x40000000u;
++    d->length = kind == DZ_GPI_RINGS ? 0x00100000u : 0x10000000u;
++    d->ops = *ops;
++    if (!new_table(d)) {
++        d->state = DZ_BAD;
++        return DZ_NO_SPACE;
++    }
++    return DZ_OK;
++}
++
++void
++dz_domain_destroy(struct dz_domain *d)
++{
++    if (!d || (d->state != DZ_MAGIC && d->state != DZ_SEALED &&
++                d->state != DZ_BAD)) return;
++    /* Caller must have verified hardware detached and TLB quiesced;
++     * destroying active hardware tables is NEVER safe. */
++    for (unsigned i = 0; i < d->ntables; ++i)
++        d->ops.free(d->ops.ctx, d->tables[i].va, d->tables[i].pa);
++    memset(d, 0, sizeof(*d));
++}
++
++static bool
++bit_get(const struct dz_domain *d, uint32_t n)
++{
++    return !!(d->occupied[n / 64u] & (UINT64_C(1) << (n % 64u)));
++}
++
++static void
++bit_set(struct dz_domain *d, uint32_t n, bool val)
++{
++    uint64_t mask = UINT64_C(1) << (n % 64u);
++    if (val) d->occupied[n / 64u] |= mask;
++    else d->occupied[n / 64u] &= ~mask;
++}
++
++int
++dz_domain_map(struct dz_domain *d, uint64_t pa, uint32_t size,
++              uint32_t alignment, enum dz_dma_access access, uint32_t *out)
++{
++    if (!d || !out) return DZ_INVALID;
++    *out = 0; /* Never expose a stale DMA IOVA when any guard fails. */
++    if (d->state != DZ_MAGIC) return DZ_NOT_READY;
++    if (!size || (size & 0xfffu) || (pa & 0xfffu) ||
++        (access != DZ_DMA_READ && access != DZ_DMA_WRITE && access != DZ_DMA_RW) ||
++        !power_two(alignment) || alignment < DZ_DMA_PAGE ||
++        alignment > d->length || size > d->length ||
++        !fits_pa(pa, size, d->pa_bits)) return DZ_INVALID;
++    for (unsigned j = 0; j < d->ntables; ++j)
++        if (pa < d->tables[j].pa + DZ_DMA_PAGE &&
++            d->tables[j].pa < pa + size) return DZ_CONFLICT;
++    unsigned rec = DZ_DMA_MAX_MAPS;
++    for (unsigned j = 0; j < DZ_DMA_MAX_MAPS; ++j) {
++        const struct dz_mapping *m = &d->maps[j];
++        if (m->active && pa < m->pa + m->size &&
++            m->pa < pa + size) return DZ_CONFLICT; /* no PA aliasing */
++        if (!m->active && rec == DZ_DMA_MAX_MAPS) rec = j;
++    }
++    if (rec == DZ_DMA_MAX_MAPS) return DZ_NO_SPACE;
++    uint32_t total = d->length / DZ_DMA_PAGE, pages = size / DZ_DMA_PAGE;
++    uint32_t i, n;
++    for (i = 0; i <= total - pages; i += alignment / DZ_DMA_PAGE) {
++        for (n = 0; n < pages; ++n) if (bit_get(d, i + n)) break;
++        if (n == pages) break;
++    }
++    if (i > total - pages) return DZ_NO_SPACE;
++    const uint32_t iova = d->base + i * DZ_DMA_PAGE;
++    /* In a live integration, no PTEs may be modified without an SMMU
++     * invalidation fence. This module permits only pre-seal modifications. */
++    d->pending_pa = pa;
++    d->pending_size = size; /* reject allocator alias with new DMA payload */
++    for (n = 0; n < pages; ++n) {
++        uint64_t *pte = leaf_entry(d, iova + n * DZ_DMA_PAGE, true);
++        if (!pte || (*pte & 1u)) {
++            d->state = DZ_BAD; /* partial table => never seal/route */
++            return DZ_POISONED;
++        }
++        *pte = (pa + (uint64_t)n * DZ_DMA_PAGE) |
++            DZ_PTE_VALID_TABLE | DZ_PTE_AF | DZ_PTE_SH_INNER |
++            DZ_PTE_NG | DZ_PTE_UNPRIV | DZ_PTE_XN |
++            (access == DZ_DMA_READ ? DZ_PTE_READ_ONLY : 0);
++        /* WRITE-only is software-enforced at API level: ARM S1 AP has
++         * no hardware "write without read" permission. */
++        bit_set(d, i + n, true);
++    }
++    d->maps[rec] = (struct dz_mapping){pa, iova, size, (uint8_t)access, true};
++    d->pending_pa = 0;
++    d->pending_size = 0;
++    *out = iova;
++    return DZ_OK;
++}
++
++int
++dz_domain_unmap(struct dz_domain *d, uint32_t iova, uint32_t size)
++{
++    if (!d || d->state != DZ_MAGIC) return DZ_NOT_READY;
++    for (unsigned j = 0; j < DZ_DMA_MAX_MAPS; ++j) {
++        struct dz_mapping *m = &d->maps[j];
++        if (!m->active || m->iova != iova || m->size != size) continue;
++        for (unsigned n = 0; n < size / DZ_DMA_PAGE; ++n) {
++            uint32_t page_iova = iova + n * DZ_DMA_PAGE;
++            uint64_t *pte = leaf_entry(d, page_iova, false);
++            if (!pte || !(*pte & 1u)) {
++                d->state = DZ_BAD;
++                return DZ_POISONED;
++            }
++            *pte = 0;
++            bit_set(d, (page_iova - d->base) / DZ_DMA_PAGE, false);
++        }
++        memset(m, 0, sizeof(*m));
++        return DZ_OK;
++    }
++    return DZ_INVALID;
++}
++
++bool
++dz_domain_covers(const struct dz_domain *d, uint32_t iova,
++                 uint32_t len, enum dz_dma_access access)
++{
++    if (!d || (d->state != DZ_MAGIC && d->state != DZ_SEALED) ||
++        !len || access < DZ_DMA_READ || access > DZ_DMA_RW) return false;
++    uint64_t end = (uint64_t)iova + len;
++    for (unsigned i = 0; i < DZ_DMA_MAX_MAPS; ++i) {
++        const struct dz_mapping *m = &d->maps[i];
++        if (m->active && (m->access & access) == access &&
++            iova >= m->iova && end <= (uint64_t)m->iova + m->size)
++            return true;
++    }
++    return false;
++}
++
++int
++dz_domain_seal(struct dz_domain *d)
++{
++    if (!d || d->state != DZ_MAGIC) return DZ_NOT_READY;
++    bool has_mapping = false;
++    for (unsigned i = 0; i < DZ_DMA_MAX_MAPS; ++i)
++        if (d->maps[i].active) { has_mapping = true; break; }
++    if (!d->ntables || !has_mapping) return DZ_NOT_READY;
++    /* Required cache maintenance callback. Software sync is NOT SMMU TLBI. */
++    for (unsigned i = 0; i < d->ntables; ++i)
++        if (d->ops.sync(d->ops.ctx, d->tables[i].va, d->tables[i].pa)) {
++            d->state = DZ_BAD;
++            return DZ_POISONED;
++        }
++    d->state = DZ_SEALED;
++    return DZ_OK;
++}
++
++static bool
++smr_matches(uint32_t smr, uint16_t sid)
++{
++    if (!(smr & (1u << 31))) return false; /* ID0.EXIDS=0 */
++    uint16_t id = (uint16_t)smr;
++    uint16_t mask = (uint16_t)((smr >> 16) & 0x7fffu);
++    return (((id ^ sid) & (uint16_t)~mask) & 0x7fffu) == 0;
++}
++
++static bool
++pa_overlap(const struct dz_domain *a, const struct dz_domain *b)
++{
++    for (unsigned i = 0; i < a->ntables; ++i) {
++        uint64_t p = a->tables[i].pa;
++        for (unsigned j = 0; j < b->ntables; ++j)
++            if (p == b->tables[j].pa) return true;
++        for (unsigned j = 0; j < DZ_DMA_MAX_MAPS; ++j)
++            if (b->maps[j].active && p < b->maps[j].pa + b->maps[j].size &&
++                b->maps[j].pa < p + DZ_DMA_PAGE) return true;
++    }
++    for (unsigned i = 0; i < b->ntables; ++i) {
++        uint64_t p = b->tables[i].pa;
++        for (unsigned j = 0; j < DZ_DMA_MAX_MAPS; ++j)
++            if (a->maps[j].active && p < a->maps[j].pa + a->maps[j].size &&
++                a->maps[j].pa < p + DZ_DMA_PAGE) return true;
++    }
++    for (unsigned i = 0; i < DZ_DMA_MAX_MAPS; ++i) {
++        const struct dz_mapping *x = &a->maps[i];
++        if (!x->active) continue;
++        for (unsigned j = 0; j < DZ_DMA_MAX_MAPS; ++j) {
++            const struct dz_mapping *y = &b->maps[j];
++            if (y->active && x->pa < y->pa + y->size &&
++                y->pa < x->pa + x->size) return true;
++        }
++    }
++    return false;
++}
++
++static void
++fill_route(struct dz_route *r, const struct dz_domain *d,
++           uint16_t sid, unsigned slot, unsigned cb)
++{
++    memset(r, 0, sizeof(*r));
++    r->sid = sid;
++    r->smr_slot = (uint16_t)slot;
++    r->cb_index = (uint16_t)cb;
++    r->asid = (uint16_t)(cb + 1u); /* nonzero, distinct */
++    r->smr_offset = 0x800u + 4u * slot;
++    r->s2cr_offset = 0xc00u + 4u * slot;
++    r->cbar_offset = 0x1000u + 4u * cb;
++    r->cba2r_offset = 0x1800u + 4u * cb;
++    r->cb_base_offset = 0x80000u + 0x1000u * cb;
++    r->smr_value = 0x80000000u | sid;  /* exact SID, no wildcards */
++    r->s2cr_value = 0x300u | cb; /* stage-1 TRANSLATE + NSH config */
++    r->cbar_value = (1u << 16) | (0xfu << 12) | (3u << 8);
++    r->cba2r_value = 1u; /* AArch64 translation table format */
++    /* 32-bit IOVA address width; 4KiB granule; inner-shared WB table walk;
++     * TTBR1 disabled. Hardware configuration is NOT executed by this API. */
++    r->tcr = (1u << 23) | (3u << 12) | (1u << 10) | (1u << 8) | 32u;
++    r->tcr2 = 0x10u | ((d->id2 >> 4) & 0xfu); /* AS=1, PASIZE=OAS */
++    r->mair0 = 0xffu; /* AttrIndx0 normal WB; PTEs set AF + inner shareable */
++    r->ttbr0 = d->tables[0].pa | ((uint64_t)r->asid << 48);
++}
++
++int
++dz_plan_routes(const struct dz_snapshot *s, const struct dz_domain *gpi,
++               const struct dz_domain *qup, struct dz_route_pair *out)
++{
++    if (!s || !gpi || !qup || !out) return DZ_INVALID;
++    memset(out, 0, sizeof(*out));
++    if (!s->exclusive_hypervisor_permission ||
++        s->id0 != DZ_SMMU_ID0 || s->id1 != DZ_SMMU_ID1 ||
++        s->id2 != gpi->id2 || s->id2 != qup->id2 ||
++        (s->scr0 & ((1u << 0) | (1u << 3))) ||
++        !(s->scr0 & (1u << 10)) ||
++        gpi == qup || gpi->state != DZ_SEALED || qup->state != DZ_SEALED ||
++        gpi->kind != DZ_GPI_RINGS || qup->kind != DZ_QUP_PAYLOADS ||
++        gpi->base != 0x100000u || qup->base != 0x40000000u ||
++        pa_overlap(gpi, qup)) return DZ_NOT_READY;
++    for (unsigned i = 0; i < DZ_SMMU_SMR_COUNT; ++i) {
++        if (!(s->smr[i] & (1u << 31))) continue;
++        if (smr_matches(s->smr[i], DZ_SMMU_GPI_SID) ||
++            smr_matches(s->smr[i], DZ_SMMU_QUP_SID)) return DZ_CONFLICT;
++        if (!s->s2cr_known[i] || ((s->s2cr[i] >> 16) & 3u) == 3u)
++            return DZ_NOT_READY;
++    }
++    unsigned slot[2] = {DZ_SMMU_SMR_COUNT, DZ_SMMU_SMR_COUNT};
++    unsigned cb[2] = {DZ_SMMU_CB_COUNT, DZ_SMMU_CB_COUNT};
++    unsigned ss = 0, cs = 0;
++    for (unsigned i = 0; i < DZ_SMMU_SMR_COUNT && ss < 2; ++i)
++        if (s->slot_claimed[i] && !(s->smr[i] & (1u << 31)))
++            slot[ss++] = i;
++    for (unsigned i = 0; i < DZ_SMMU_CB_COUNT && cs < 2; ++i)
++        if (s->cb_claimed[i]) cb[cs++] = i;
++    if (ss != 2 || cs != 2) return DZ_NO_SPACE;
++    /* Checked against observed existing S2CR translations, not just SMR
++     * entries. A free-looking SMR does NOT imply its CB is available. */
++    for (unsigned i = 0; i < DZ_SMMU_SMR_COUNT; ++i) {
++        if (!(s->smr[i] & (1u << 31))) continue;
++        if (((s->s2cr[i] >> 16) & 3u) != 0) continue;
++        unsigned used_cb = s->s2cr[i] & 0xffu;
++        if (used_cb >= DZ_SMMU_CB_COUNT) return DZ_INVALID;
++        if (used_cb == cb[0] || used_cb == cb[1]) return DZ_CONFLICT;
++    }
++    fill_route(&out->gpi, gpi, DZ_SMMU_GPI_SID, slot[0], cb[0]);
++    fill_route(&out->qup, qup, DZ_SMMU_QUP_SID, slot[1], cb[1]);
++    return DZ_OK;
++}
++
++static bool
++regions_separate(uint32_t a, uint32_t alen, uint32_t b, uint32_t blen)
++{
++    return (uint64_t)a + alen <= b || (uint64_t)b + blen <= a;
++}
++
++int
++dz_gpi_check_rings(const struct dz_domain *gpi, uint32_t tx,
++                   uint32_t rx, uint32_t ev)
++{
++    if (!gpi || gpi->kind != DZ_GPI_RINGS ||
++        gpi->state != DZ_SEALED ||
++        (tx & 1023u) || (rx & 1023u) || (ev & 4095u) ||
++        !regions_separate(tx, 1024u, rx, 1024u) ||
++        !regions_separate(tx, 1024u, ev, 4096u) ||
++        !regions_separate(rx, 1024u, ev, 4096u) ||
++        !dz_domain_covers(gpi, tx, 1024, DZ_DMA_RW) ||
++        !dz_domain_covers(gpi, rx, 1024, DZ_DMA_RW) ||
++        !dz_domain_covers(gpi, ev, 4096, DZ_DMA_RW)) return DZ_NOT_READY;
++    return DZ_OK;
++}
++
++int
++dz_gpi_spi_buffer_tre(const struct dz_domain *qup, uint32_t buf,
++                      uint32_t len, bool tx, struct dz_tre *out)
++{
++    if (!out || !qup || qup->kind != DZ_QUP_PAYLOADS ||
++        qup->state != DZ_SEALED || !len || len > 0xffffffu ||
++        !dz_domain_covers(qup, buf, len,
++                          tx ? DZ_DMA_READ : DZ_DMA_WRITE)) return DZ_NOT_READY;
++    *out = (struct dz_tre){{buf, 0, len, (1u << 20) | (tx ? (1u << 9) : 0u)}};
++    return DZ_OK;
++}
++
++int
++dz_gpi_spi_go_tre(uint32_t rx_len, struct dz_tre *out)
++{
++    if (!out || !rx_len || rx_len > 0xffffffu) return DZ_INVALID;
++    /* Vendor SPI_FULL_DUPLEX opcode=3, CS0; LINK_RX + CHAIN on TX GO. */
++    *out = (struct dz_tre){{3u, 0, rx_len, (2u << 20) | (1u << 11) | 1u}};
++    return DZ_OK;
++}

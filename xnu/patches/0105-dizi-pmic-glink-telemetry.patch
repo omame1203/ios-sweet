@@ -1,0 +1,427 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -12,9 +12,63 @@
+ #include <IOKit/pwr_mgt/IOPMPowerSource.h>
+ #include <libkern/c++/OSCollectionIterator.h>
+ #include <pexpert/pexpert.h>
++#include <kern/clock.h>
++#include <kern/locks.h>
++#include "DiziPmicTelemetry.h"
+ /* bsd/dev/sweet_spmi.c */
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
++
++/* Future trusted transport handoff, never called by this patch. The ADSP
++ * channel PMIC_RTR_ADSP_APPS and its protection domain must be exclusively
++ * owned and negotiated before link_up is asserted. No GLINK MMIO is assumed. */
++static LCK_GRP_DECLARE(dizi_bc_lock_grp, "dizi-pmic-glink");
++static LCK_MTX_DECLARE(dizi_bc_lock, &dizi_bc_lock_grp);
++static struct dizi_bc_state dizi_bc_telemetry;
++static bool dizi_bc_enabled;
++
++static uint64_t
++dizi_bc_now_ms(void)
++{
++    uint64_t nanoseconds = 0;
++    absolutetime_to_nanoseconds(mach_absolute_time(), &nanoseconds);
++    return nanoseconds / 1000000ULL;
++}
++
++extern "C" void
++dizi_pmic_glink_transport_state(bool link_up, bool exclusive_owned)
++{
++    lck_mtx_lock(&dizi_bc_lock);
++    if (dizi_bc_enabled)
++        dizi_bc_link(&dizi_bc_telemetry, link_up, exclusive_owned);
++    lck_mtx_unlock(&dizi_bc_lock);
++}
++
++/* The caller must send the returned request on the same owned GLINK channel
++ * and feed the reply. On transmit error it must call transport_state(false).
++ * No actual request is transmitted by 0105. */
++extern "C" bool
++dizi_pmic_glink_begin_get(unsigned slot, uint8_t out[24], size_t *size)
++{
++    bool ok = false;
++    lck_mtx_lock(&dizi_bc_lock);
++    if (dizi_bc_enabled)
++        ok = dizi_bc_make_get(&dizi_bc_telemetry, slot, dizi_bc_now_ms(), out, size);
++    lck_mtx_unlock(&dizi_bc_lock);
++    return ok;
++}
++
++extern "C" bool
++dizi_pmic_glink_receive(const uint8_t *bytes, size_t size)
++{
++    bool ok = false;
++    lck_mtx_lock(&dizi_bc_lock);
++    if (dizi_bc_enabled)
++        ok = dizi_bc_receive(&dizi_bc_telemetry, bytes, size, dizi_bc_now_ms());
++    lck_mtx_unlock(&dizi_bc_lock);
++    return ok;
++}
++
+ 
+ class SweetBattery : public IOPMPowerSource {
+ 	OSDeclareDefaultStructors(SweetBattery);
+@@ -26,13 +80,14 @@
+ private:
+ 	IOWorkLoop *fLoop;
+ 	IOTimerEventSource *fTimer;
+-	bool fTimerAdded, fRunning, fReal;
++	bool fTimerAdded, fRunning, fReal, fDizi;
+ 	int fLastMode;
+ 	void putNumber(const char *key, UInt32 value);
+ 	void putBool(const char *key, bool value);
+ 	void publish(unsigned percent, unsigned mv, int ma, bool external,
+ 	    bool capable, bool charging, bool full, bool measured, bool currentValid);
+ 	void poll(void);
++	void pollDizi(void);
+ 	static void timerFired(OSObject *owner, IOTimerEventSource *sender);
+ 	static IOReturn stopPolling(OSObject *owner, void *, void *, void *, void *);
+ 	static bool readWord(unsigned address, uint16_t *value);
+@@ -51,7 +106,7 @@
+ 	}
+ 	fLoop = NULL;
+ 	fTimer = NULL;
+-	fTimerAdded = fRunning = fReal = false;
++	fTimerAdded = fRunning = fReal = fDizi = false;
+ 	if (dictionary) {
+ 		OSCollectionIterator *it = OSCollectionIterator::withCollection(dictionary);
+ 		if (!it) {
+@@ -204,8 +259,67 @@
+ }
+ 
+ void
++SweetBattery::pollDizi(void)
++{
++    struct dizi_bc_snapshot snapshot = {};
++    uint64_t now = dizi_bc_now_ms();
++    lck_mtx_lock(&dizi_bc_lock);
++    bool valid = dizi_bc_enabled &&
++        !dizi_bc_expire(&dizi_bc_telemetry, now) &&
++        dizi_bc_snapshot(&dizi_bc_telemetry, now, &snapshot);
++    lck_mtx_unlock(&dizi_bc_lock);
++    putBool("DiziBatteryTelemetryValid", valid);
++    putBool("DiziBatteryStatusUnknown", !valid);
++    if (!valid) {
++        /* Never send sweet's fictional 100%, 4200mV, external AC on dizi.
++         * A previously published sample is also invalid after link loss. */
++        if (fLastMode == 2) {
++            setBatteryInstalled(false);
++            setExternalConnected(false);
++            setExternalChargeCapable(false);
++            setIsCharging(false);
++            setTimeRemaining(-1);
++            updateStatus();
++        }
++        fLastMode = -1;
++        return;
++    }
++    /* All values below originated in individually validated ADSP replies.
++     * BATT_CAPACITY is hundredths of a percent (MiCode /100). The reported
++     * CHG_FULL is measured uAh, not a guessed design capacity. */
++    unsigned max_mAh = snapshot.full_uah / 1000u;
++    unsigned pct = (snapshot.capacity_basis + 50u) / 100u;
++    unsigned current_mAh = (unsigned)(((uint64_t)max_mAh * snapshot.capacity_basis + 5000u) / 10000u);
++    setBatteryInstalled(snapshot.present);
++    setMaxCapacity(max_mAh);
++    setCurrentCapacity(current_mAh);
++    setExternalConnected(snapshot.usb_online);
++    setExternalChargeCapable(snapshot.usb_online);
++    setIsCharging(snapshot.status == 1);
++    setVoltage(snapshot.voltage_uv / 1000u);
++    setAmperage(snapshot.current_ua / 1000);
++    setTimeRemaining(-1); /* TTE/TTF have not been measured. */
++    putBool("FullyCharged", snapshot.status == 4);
++    putNumber("Temperature", (UInt32)snapshot.temp_centi); /* Linux raw 0.01 C */
++    putNumber("SweetBatteryPercent", pct);
++    putBool("SweetBatteryHardwareSampleValid", true);
++    putBool("SweetBatterySOCEstimated", false);
++    putBool("SweetBatteryFallback", false);
++    updateStatus();
++    if (fLastMode != 2) {
++        IOLog("DIZI BATTERY: validated PMIC-GLINK snapshot; charge=%u%%, %umV, USB=%d\n",
++            pct, snapshot.voltage_uv / 1000u, snapshot.usb_online);
++        fLastMode = 2;
++    }
++}
++
++void
+ SweetBattery::poll(void)
+ {
++    if (fDizi) {
++        pollDizi();
++        return;
++    }
+ 	uint8_t type, present, usb, path, charger, error, temperature;
+ 	uint16_t rawVoltage;
+ 	bool valid = fReal &&
+@@ -252,7 +366,7 @@
+ 	SweetBattery *self = OSDynamicCast(SweetBattery, owner);
+ 	if (self && self->fRunning) {
+ 		self->poll();
+-		sender->setTimeoutMS(30000);
++		sender->setTimeoutMS(self->fDizi ? 5000 : 30000);
+ 	}
+ }
+ 
+@@ -262,22 +376,32 @@
+ 	if (!IOPMPowerSource::start(provider)) {
+ 		return false;
+ 	}
+-	int real = 0;
++	int real = 0, dizi = 0, telemetry = 0;
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+-	fReal = real == 1 && sweet_spmi_init() == 0;
++	(void)PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
++	(void)PE_parse_boot_argn("dizibattery", &telemetry, sizeof(telemetry));
++	fDizi = dizi == 1;
++	if (fDizi) {
++	    lck_mtx_lock(&dizi_bc_lock);
++	    dizi_bc_enabled = telemetry == 1;
++	    dizi_bc_link(&dizi_bc_telemetry, false, false);
++	    lck_mtx_unlock(&dizi_bc_lock);
++	}
++	fReal = !fDizi && real == 1 && sweet_spmi_init() == 0;
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+-	if (fReal) {
++	if (fReal || fDizi) {
+ 		fLoop = IOWorkLoop::workLoop();
+ 		fTimer = IOTimerEventSource::timerEventSource(this, &SweetBattery::timerFired);
+ 		if (fLoop && fTimer && fLoop->addEventSource(fTimer) == kIOReturnSuccess) {
+ 			fTimerAdded = true;
+ 			fRunning = true;
+-			fTimer->setTimeoutMS(30000);
++			fTimer->setTimeoutMS(fDizi ? 5000 : 30000);
+ 		} else {
+ 			fReal = false;
+-			poll();
+-			IOLog("SWEET BATTERY: timer unavailable; static fallback\n");
++            if (!fDizi) poll();
++            IOLog(fDizi ? "DIZI BATTERY: timer unavailable; telemetry unknown\n" :
++                "SWEET BATTERY: timer unavailable; static fallback\n");
+ 		}
+ 	}
+ 	registerService();
+@@ -293,6 +417,12 @@
+ 		fLoop->removeEventSource(fTimer);
+ 		fTimerAdded = false;
+ 	}
++    if (fDizi) {
++        lck_mtx_lock(&dizi_bc_lock);
++        dizi_bc_enabled = false;
++        dizi_bc_link(&dizi_bc_telemetry, false, false);
++        lck_mtx_unlock(&dizi_bc_lock);
++    }
+ 	IOPMPowerSource::stop(provider);
+ }
+ 
+diff --git a/iokit/Kernel/arm/DiziPmicTelemetry.h b/iokit/Kernel/arm/DiziPmicTelemetry.h
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/DiziPmicTelemetry.h
+@@ -0,0 +1,202 @@
++/*
++ * Dizi PMIC-GLINK battery telemetry wire parser (NO RPMSG transport here).
++ * Grounded in dizi-live.dts qcom,pmic_glink / PMIC_RTR_ADSP_APPS and
++ * MiCode drivers/power/supply/qti_battery_charger.c.
++ * Header-only plain C for use in both XNU C++ and independent host tests.
++ */
++#ifndef DIZI_PMIC_TELEMETRY_H
++#define DIZI_PMIC_TELEMETRY_H
++#include <stdint.h>
++#include <stddef.h>
++#include <stdbool.h>
++
++#define DIZI_BC_OWNER       32778u
++#define DIZI_BC_REQ_RESP    1u
++#define DIZI_BC_NOTIFY      2u
++#define DIZI_BC_BATT_GET    0x30u
++#define DIZI_BC_USB_GET     0x32u
++#define DIZI_BC_NOTIFY_IND  0x07u
++#define DIZI_BC_NOTIFY_BATT 0x80u
++#define DIZI_BC_WAIT_MS     1000u /* Linux BC_WAIT_TIME_MS */
++#define DIZI_BC_FRESH_MS    15000u
++#define DIZI_BC_COUNT       8u
++#define DIZI_BC_FULL_MASK   ((1u << DIZI_BC_COUNT) - 1u)
++
++enum dizi_bc_slot {
++    DZ_BATT_STATUS = 0, DZ_BATT_PRESENT, DZ_BATT_CAPACITY, DZ_BATT_VOLT_UV,
++    DZ_BATT_CURR_UA, DZ_BATT_TEMP_CENTI, DZ_BATT_FULL_UAH, DZ_USB_ONLINE
++};
++
++struct dizi_bc_state {
++    uint64_t when[DIZI_BC_COUNT];
++    uint32_t value[DIZI_BC_COUNT];
++    uint64_t requested_at;
++    uint32_t generation, have;
++    uint8_t online, owned, pending, requested_slot;
++};
++
++struct dizi_bc_snapshot {
++    uint32_t status, capacity_basis, voltage_uv, full_uah;
++    int32_t current_ua, temp_centi;
++    bool present, usb_online;
++};
++
++static inline uint32_t
++dizi_bc_get32(const uint8_t *p)
++{
++    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++        ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++static inline void
++dizi_bc_put32(uint8_t *p, uint32_t v)
++{
++    p[0] = (uint8_t)v;
++    p[1] = (uint8_t)(v >> 8);
++    p[2] = (uint8_t)(v >> 16);
++    p[3] = (uint8_t)(v >> 24);
++}
++
++static inline uint32_t
++dizi_bc_property(unsigned slot)
++{
++    /* Exact MiCode enum battery_property_id and usb_property_id order. */
++    static const uint8_t ids[DIZI_BC_COUNT] = {0, 2, 4, 7, 9, 12, 17, 0};
++    return slot < DIZI_BC_COUNT ? ids[slot] : UINT32_MAX;
++}
++
++static inline uint32_t
++dizi_bc_opcode(unsigned slot)
++{
++    return slot == DZ_USB_ONLINE ? DIZI_BC_USB_GET : DIZI_BC_BATT_GET;
++}
++
++static inline bool
++dizi_bc_value_valid(unsigned slot, uint32_t v)
++{
++    switch (slot) {
++    case DZ_BATT_STATUS: return v >= 1 && v <= 4; /* Linux charging..full */
++    case DZ_BATT_PRESENT: return v == 1; /* absent isn't a usable battery */
++    case DZ_BATT_CAPACITY: return v <= 10000; /* basis points, 100=1% */
++    case DZ_BATT_VOLT_UV: return v >= 2000000 && v <= 5500000;
++    case DZ_BATT_CURR_UA: return (int32_t)v >= -15000000 && (int32_t)v <= 15000000;
++    case DZ_BATT_TEMP_CENTI: return (int32_t)v >= -4000 && (int32_t)v <= 8500;
++    case DZ_BATT_FULL_UAH: return v >= 500000 && v <= 30000000;
++    case DZ_USB_ONLINE: return v <= 1;
++    default: return false;
++    }
++}
++
++/* Called ONLY by an eventual GLINK transport that exclusively owns the
++ * PMIC_RTR_ADSP_APPS channel, with ADSP/charger protection domain alive.
++ * No such verified transport exists in this patch: nothing calls link_up.
++ * This is a software contract, not a claim that GLINK has been initialized. */
++static inline void
++dizi_bc_link(struct dizi_bc_state *s, bool up, bool owned)
++{
++    s->generation++;
++    s->have = 0;
++    s->pending = 0;
++    s->online = up && owned;
++    s->owned = up && owned;
++}
++
++/* Build exactly the 20-byte Linux read_property_id wire request, not a
++ * charger SET request. One request at a time because GLINK has no seq ID. */
++static inline bool
++dizi_bc_make_get(struct dizi_bc_state *s, unsigned slot, uint64_t now_ms,
++    uint8_t out[24], size_t *length)
++{
++    if (!s->online || !s->owned || s->pending || slot >= DIZI_BC_COUNT ||
++        !out || !length)
++        return false;
++    dizi_bc_put32(out + 0, DIZI_BC_OWNER);
++    dizi_bc_put32(out + 4, DIZI_BC_REQ_RESP);
++    dizi_bc_put32(out + 8, dizi_bc_opcode(slot));
++    dizi_bc_put32(out + 12, 0); /* battery_id 0, also used for USB */
++    dizi_bc_put32(out + 16, dizi_bc_property(slot));
++    dizi_bc_put32(out + 20, 0); /* value reserved by GET */
++    /* MiCode struct request is 24 bytes, not 20. */
++    *length = 24;
++    s->requested_at = now_ms;
++    s->requested_slot = (uint8_t)slot;
++    s->pending = 1;
++    return true;
++}
++
++/* Invalid timeout tears down the logical link. A new, verified GLINK
++ * channel epoch/remote barrier is required before accepting new samples. */
++static inline bool
++dizi_bc_expire(struct dizi_bc_state *s, uint64_t now_ms)
++{
++    if (s->pending && (now_ms < s->requested_at ||
++        now_ms - s->requested_at > DIZI_BC_WAIT_MS)) {
++        dizi_bc_link(s, false, false);
++        return true;
++    }
++    return false;
++}
++
++/* Payload owner/type/opcode, response size and pending property must ALL
++ * match. Never trust notifications as measurements. No in-band version
++ * exists in MiCode pmic_glink_hdr: transport version must be negotiated
++ * by the separately implemented GLINK layer, not fabricated here. */
++static inline bool
++dizi_bc_receive(struct dizi_bc_state *s, const uint8_t *buf, size_t size,
++    uint64_t now_ms)
++{
++    if (!s->online || !s->owned || !buf || size < 12 || size > 24)
++        return false;
++    if (dizi_bc_expire(s, now_ms)) return false;
++    uint32_t owner = dizi_bc_get32(buf), type = dizi_bc_get32(buf + 4);
++    uint32_t opcode = dizi_bc_get32(buf + 8);
++    if (owner != DIZI_BC_OWNER) return false;
++    if (type == DIZI_BC_NOTIFY && opcode == DIZI_BC_NOTIFY_IND && size == 16) {
++        uint32_t notify = dizi_bc_get32(buf + 12);
++        if (notify == DIZI_BC_BATT_GET || notify == DIZI_BC_NOTIFY_BATT)
++            s->have &= ~(DIZI_BC_FULL_MASK & ~(1u << DZ_USB_ONLINE));
++        else if (notify == DIZI_BC_USB_GET)
++            s->have &= ~(1u << DZ_USB_ONLINE);
++        else
++            return false;
++        return true;
++    }
++    if (type != DIZI_BC_REQ_RESP || size != 24 || !s->pending ||
++        opcode != dizi_bc_opcode(s->requested_slot) ||
++        dizi_bc_get32(buf + 12) != dizi_bc_property(s->requested_slot))
++        return false;
++    unsigned slot = s->requested_slot;
++    uint32_t v = dizi_bc_get32(buf + 16), rc = dizi_bc_get32(buf + 20);
++    s->pending = 0;
++    if (rc != 0 || !dizi_bc_value_valid(slot, v)) {
++        s->have &= ~(1u << slot);
++        return false;
++    }
++    s->value[slot] = v;
++    s->when[slot] = now_ms;
++    s->have |= 1u << slot;
++    return true;
++}
++
++static inline bool
++dizi_bc_snapshot(const struct dizi_bc_state *s, uint64_t now_ms,
++    struct dizi_bc_snapshot *out)
++{
++    if (!out || !s->online || !s->owned || s->pending ||
++        s->have != DIZI_BC_FULL_MASK)
++        return false;
++    for (unsigned i = 0; i < DIZI_BC_COUNT; i++) {
++        if (now_ms < s->when[i] || now_ms - s->when[i] > DIZI_BC_FRESH_MS)
++            return false;
++    }
++    out->status = s->value[DZ_BATT_STATUS];
++    out->present = s->value[DZ_BATT_PRESENT] != 0;
++    out->capacity_basis = s->value[DZ_BATT_CAPACITY];
++    out->voltage_uv = s->value[DZ_BATT_VOLT_UV];
++    out->current_ua = (int32_t)s->value[DZ_BATT_CURR_UA];
++    out->temp_centi = (int32_t)s->value[DZ_BATT_TEMP_CENTI];
++    out->full_uah = s->value[DZ_BATT_FULL_UAH];
++    out->usb_online = s->value[DZ_USB_ONLINE] != 0;
++    return true;
++}
++#endif /* DIZI_PMIC_TELEMETRY_H */

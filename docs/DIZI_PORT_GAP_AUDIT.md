@@ -58,6 +58,26 @@ number of touchscreen-specific source files.
 
 ## Engineering order
 
+### Offline source implementation checkpoint (2026-10-21)
+
+After this audit, XNU patches `0101`–`0106` added testable pieces for
+PMK8350 RTC readout, SMMUv2 Stage1 IOVA allocation and GPI TRE building,
+BOE LCD power-state bookkeeping, Novatek SRAM firmware packet planning,
+PMIC-GLINK battery reply validation and opt-in USB CDC-ECM link metadata.
+They apply after the existing patch `0100`. Standalone mock and ARM64
+compilation checks passed; see `tests/test-dizi-port.py` and separate
+PMIC/USB tests. No new tablet runtime measurements or boots were performed.
+
+The **hardware completeness table above remains accurate**: the SMMU
+component is not yet attached to Gunyah-protected stream/context registers;
+the GPI rings are not being driven; LCD has no verified TLMM/DSI/brightness
+backend; the battery parser has no owned ADSP GLINK transport; and the USB
+bridge does not establish working ECM or Internet on dizi. RTC values are
+exposed raw, not applied as an authoritative system clock. GPU, WLAN/BT,
+camera, audio, sensors, suspend/resume, security and several other platform
+systems require additional native implementations. Full device functional
+completion cannot be demonstrated without hardware validation.
+
 First verify basic power/thermal status, then validate dizi CPU
 topology/interrupts and build low-level clock, PMIC-GLINK/SPMI/regulator, RTC
 and reliable diagnostics as reusable platform services.

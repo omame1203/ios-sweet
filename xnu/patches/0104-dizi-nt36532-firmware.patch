@@ -1,0 +1,223 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -114,6 +114,7 @@
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
++bsd/dev/dizi_nt36532_fw.c		standard
+ 
+ bsd/dev/monotonic.c optional monotonic
+ bsd/dev/dev_perfmon.c optional config_perfmon
+--- /dev/null
++++ b/bsd/dev/dizi_nt36532_fw.c
+@@ -0,0 +1,140 @@
++/* Structural validator for the published Novatek NT36532 boot firmware.
++ * This is a bounded translation of the Linux nt36xxx_fw_update.c header
++ * format, including the optional cascade second header. No hardware writes.
++ * SPDX-License-Identifier: MIT
++ */
++#include "nt36532_fw.h"
++#include <string.h>
++
++static uint32_t le32(const uint8_t *p)
++{
++    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++        ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++static int insert_part(struct dizi_nvt_fw *fw, uint32_t index,
++    uint32_t source, uint32_t destination, uint32_t encoded_len, uint32_t crc)
++{
++    if (index >= DIZI_NVT_FW_MAX_PARTITIONS || destination > 0xffffffu)
++        return -1;
++    struct dizi_nvt_fw_partition *p = &fw->part[index];
++    p->file_offset = source;
++    p->sram_address = destination;
++    p->expected_crc = crc;
++    if (!encoded_len) return 0; /* Reserved partition in vendor format. */
++    if (encoded_len == UINT32_MAX) return -1;
++    uint32_t count = encoded_len + 1;
++    /* 24-bit Novatek SRAM addressing; inclusive vendor length semantics. */
++    if ((size_t)source > fw->size || (size_t)count > fw->size - source ||
++        (uint64_t)destination + count > 0x1000000ull)
++        return -1;
++    p->byte_count = count;
++    return 0;
++}
++
++int dizi_nvt_fw_parse(const uint8_t *bytes, size_t len, struct dizi_nvt_fw *out)
++{
++    if (!bytes || !out || len < 8192 || len % 4096 || len > UINT32_MAX)
++        return -1;
++    /* The vendor searches from the end for NVT/MOD; all recognized dizi
++     * boot blobs have the marker at EOF. Refuse ambiguous truncated images. */
++    if (memcmp(bytes + len - 3, "NVT", 3) &&
++        memcmp(bytes + len - 3, "MOD", 3)) return -1;
++    if (((unsigned)bytes[len - 4096] + bytes[len - 4095]) != 255u)
++        return -1;
++    uint32_t end = le32(bytes);
++    if (end < 0x30 || end > len - 4096 || (end & 15u)) return -1;
++    uint32_t second = !!(bytes[0x20] & 2u);
++    uint32_t first_end = second ? end / 2u : end;
++    if (first_end < 0x30 || (first_end - 0x30u) % 16u) return -1;
++    uint32_t info_count = (first_end - 0x30u) / 16u + second;
++    uint32_t overlay_count = (bytes[0x28] & 0x10u) ? (bytes[0x28] & 15u) : 0;
++    uint32_t count = 2u + info_count + overlay_count;
++    if (count > DIZI_NVT_FW_MAX_PARTITIONS) return -1;
++    struct dizi_nvt_fw tmp;
++    memset(&tmp, 0, sizeof(tmp));
++    tmp.data = bytes;
++    tmp.size = len;
++    tmp.header_end = end;
++    tmp.version = bytes[len - 4096];
++    tmp.partitions = count;
++    for (uint32_t i = 0; i < 2; ++i) {
++        const uint8_t *h = bytes + 12u * i;
++        if (insert_part(&tmp, i, le32(h), le32(h + 4), le32(h + 8),
++                le32(bytes + 0x18 + 4u * i))) return -1;
++    }
++    uint32_t find_header = 0;
++    for (uint32_t i = 0; i < info_count; ++i) {
++        uint32_t pos = 0x30u + i * 0x10u;
++        if (find_header && second) pos = end - 0x10u;
++        if ((uint64_t)pos + 16 > end) return -1;
++        const uint8_t *h = bytes + pos;
++        uint32_t dst = le32(h), size = le32(h + 4), src = le32(h + 8);
++        if (insert_part(&tmp, i + 2u, src, dst, size, le32(h + 12)))
++            return -1;
++        if (src < end && size) find_header = 1;
++    }
++    for (uint32_t i = 0; i < overlay_count; ++i) {
++        const struct dizi_nvt_fw_partition *dlm = &tmp.part[1];
++        uint64_t pos = (uint64_t)dlm->file_offset + (uint64_t)i * 16u;
++        if (pos + 16u > len) return -1;
++        const uint8_t *h = bytes + (size_t)pos;
++        if (insert_part(&tmp, i + 2u + info_count, le32(h + 8),
++                le32(h), le32(h + 4), le32(h + 12))) return -1;
++    }
++    if (!tmp.part[0].byte_count || !tmp.part[1].byte_count) return -1;
++    *out = tmp;
++    return 0;
++}
++
++int dizi_nvt_fw_next(const struct dizi_nvt_fw *fw,
++    struct dizi_nvt_fw_cursor *cursor, struct dizi_nvt_fw_packet *packet)
++{
++    if (!fw || !fw->data || !cursor || !packet ||
++        fw->partitions > DIZI_NVT_FW_MAX_PARTITIONS) return -1;
++    while (cursor->partition < fw->partitions) {
++        const struct dizi_nvt_fw_partition *p = &fw->part[cursor->partition];
++        if (cursor->offset > p->byte_count) return -1;
++        if (cursor->offset == p->byte_count) {
++            ++cursor->partition;
++            cursor->offset = 0;
++            continue;
++        }
++        uint64_t dst = (uint64_t)p->sram_address + cursor->offset;
++        uint64_t src = (uint64_t)p->file_offset + cursor->offset;
++        if (dst > 0xffffffu || src >= fw->size) return -1;
++        unsigned offset = (unsigned)(dst & (DIZI_NVT_FW_PAGE_SIZE - 1u));
++        uint32_t remaining = p->byte_count - cursor->offset;
++        size_t n = DIZI_NVT_FW_PAGE_SIZE - offset;
++        if (n > remaining) n = remaining;
++        if (n > fw->size - (size_t)src) return -1;
++        packet->sram_page = (uint32_t)(dst & ~127ull);
++        packet->page_offset = (uint8_t)offset;
++        packet->bytes = fw->data + src;
++        packet->length = n;
++        cursor->offset += (uint32_t)n;
++        return 1;
++    }
++    return cursor->partition == fw->partitions ? 0 : -1;
++}
++
++int dizi_nvt_fw_upload(const struct dizi_nvt_fw *fw,
++    const struct dizi_nvt_fw_transport *transport)
++{
++    if (!fw || !transport || !transport->select_page ||
++        !transport->write_sram) return -1;
++    struct dizi_nvt_fw_cursor cursor = {0, 0};
++    struct dizi_nvt_fw_packet pkt;
++    uint32_t page = UINT32_MAX;
++    int rc;
++    while ((rc = dizi_nvt_fw_next(fw, &cursor, &pkt)) == 1) {
++        if (pkt.sram_page != page) {
++            if (transport->select_page(transport->context, pkt.sram_page))
++                return -1;
++            page = pkt.sram_page;
++        }
++        if (transport->write_sram(transport->context,
++                pkt.page_offset, pkt.bytes, pkt.length)) return -1;
++    }
++    return rc;
++}
+--- /dev/null
++++ b/bsd/dev/nt36532_fw.h
+@@ -0,0 +1,67 @@
++/* NT36532 SPI SRAM firmware image parser and transport-independent plan.
++ * SPDX-License-Identifier: MIT
++ * The binary firmware is a separate vendor-supplied asset and is not embedded.
++ */
++#ifndef DIZI_NT36532_FW_H
++#define DIZI_NT36532_FW_H
++#include <stddef.h>
++#include <stdint.h>
++
++#define DIZI_NVT_FW_MAX_PARTITIONS 64u
++#define DIZI_NVT_FW_PAGE_SIZE 128u
++
++struct dizi_nvt_fw_partition {
++    uint32_t file_offset;
++    uint32_t sram_address;
++    uint32_t byte_count; /* Inclusive vendor header size + 1; 0 = reserved. */
++    uint32_t expected_crc; /* Hardware CRC, not ordinary zlib CRC32. */
++};
++
++struct dizi_nvt_fw {
++    const uint8_t *data;
++    size_t size;
++    uint32_t header_end;
++    uint32_t partitions;
++    uint8_t version;
++    struct dizi_nvt_fw_partition part[DIZI_NVT_FW_MAX_PARTITIONS];
++};
++
++struct dizi_nvt_fw_cursor {
++    uint32_t partition;
++    uint32_t offset;
++};
++
++struct dizi_nvt_fw_packet {
++    uint32_t sram_page;  /* 24-bit Novatek page selection address. */
++    uint8_t page_offset; /* SRAM register offset for SPI write command. */
++    const uint8_t *bytes;
++    size_t length;
++};
++
++/* Return 0 on success, negative on a structurally invalid or unsafe image. */
++int dizi_nvt_fw_parse(const uint8_t *bytes, size_t len, struct dizi_nvt_fw *out);
++
++/* Return 1 for a valid packet, 0 for end, negative for corrupt plan/cursor.
++ * Does not write registers, allocate memory, or issue SPI transactions.
++ * Sender must validate the chip identity, establish safe DMA, select the
++ * page and write [page_offset, bytes...] with its own verified transport.
++ */
++int dizi_nvt_fw_next(const struct dizi_nvt_fw *fw,
++    struct dizi_nvt_fw_cursor *cursor, struct dizi_nvt_fw_packet *packet);
++
++/* Transport adapter for a controller whose reset/identity and DMA rings
++ * have independently been verified. The callbacks must return 0 on success.
++ * No hardware ownership or reset is implied by this function; it stops at
++ * the first failed callback. Caller must check controller HW CRC and the
++ * post-start firmware handshake before declaring touch ready. */
++struct dizi_nvt_fw_transport {
++    void *context;
++    int (*select_page)(void *context, uint32_t address);
++    int (*write_sram)(void *context, uint8_t offset,
++        const uint8_t *bytes, size_t len);
++};
++
++int dizi_nvt_fw_upload(const struct dizi_nvt_fw *fw,
++    const struct dizi_nvt_fw_transport *transport);
++
++#endif

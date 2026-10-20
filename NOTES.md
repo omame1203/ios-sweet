@@ -13,6 +13,35 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21 software-only implementation continuation (NO device boot):**
+  Responding to the request to implement the remaining POCO Pad iPadOS
+  platform support without a temporary boot, added new XNU patch series
+  **0101–0106** and independent portable host tests. 0101: PMK8350 RTC
+  SPMI-v7 read-only sampled counter (`dizirtc=1`, sysctl returns
+  uncalibrated epoch seconds, no system-clock setting). 0102: SMMUv2 Stage1
+  4KiB page tables and distinct GPI/QUP IOVA software allocator/TRE builder,
+  fail-closed until unknown ID2/stream/context ownership and physical DMA
+  activation are proven. 0103: dizi LCD black/backlight transactional state
+  model, current backend absent so black framebuffer still powers the LCD.
+  0104: Novatek BOE/CSOT-capable firmware-header/partition validator and
+  transport-independent 128-byte SRAM packets; local public BOE 245760B
+  blob yields 204000B and 1597 packets in mock SRAM; no live SPI/GPI DMA
+  or firmware flashing occurs. 0105: qcom PMIC-GLINK battery/USB telemetry
+  reply parser and unknown-status power-source path; real ADSP GLINK
+  transport missing, never report fictional 100% AC as measured. 0106:
+  opt-in dizi USB CDC-ECM host-link/ifnet-state and IOKit metadata, with
+  native XNU gadget still off by default and no asserted Internet link.
+  All 0101–0106 patches applied in order to ignored local XNU stage;
+  0101/0102/0103/0104/0106 C TUs compiled to real ARM64 Mach-O objects
+  using recorded full XNU compiler flags; related XNU C++ syntax checks
+  passed in host compatibility mode. All available host mock/SAN tests
+  passed. **These are source-level building blocks, not complete native
+  hardware drivers.** Runtime SMMU domain ownership, GPI commands, real
+  backlight, PMIC GLINK, DSI/GPU, WCN6750 WLAN/BT, ADSP audio, sensors,
+  cameras, SEP and reliable SMP/suspend remain unfinished. The physical
+  POCO Pad was NOT accessed, rebooted, flashed, or temporarily booted for
+  this work. Final CI result/commit to be appended after integration.
+
 - **2026-10-21 dizi platform completeness audit (source/log review only):**
   `docs/DIZI_PORT_GAP_AUDIT.md` is the prioritized porting dependency
   inventory, grounded in `boards/dizi.json`, XNU patches, the live FDT

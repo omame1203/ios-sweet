@@ -1,0 +1,312 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -106,6 +106,7 @@
+ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/sweet_sample.c			standard
++bsd/dev/sweet_lcd.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+diff --git a/bsd/dev/sweet_lcd.h b/bsd/dev/sweet_lcd.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/sweet_lcd.h
+@@ -0,0 +1,77 @@
++/*
++ * Dizi BOE LCD VIDEO mode: power-policy model, deliberately no MMIO backend.
++ * Host-testable C interface used by the IOMobileFramebuffer power selector.
++ * The current native port inherits an already-lit ABL splash: video scanout,
++ * GPIO57 polarity/direction, and panel-supply ownership are NOT verified.
++ */
++#ifndef _BSD_DEV_SWEET_LCD_H_
++#define _BSD_DEV_SWEET_LCD_H_
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define SWEET_LCD_DIZI_WIDTH       1600u
++#define SWEET_LCD_DIZI_HEIGHT      2560u
++#define SWEET_LCD_DIZI_BL_GPIO     57u   /* TLMM: FDT platform-bklight-en */
++#define SWEET_LCD_DIZI_RESET_GPIO  98u   /* TLMM: do not drive without DSI/rail bringup */
++#define SWEET_LCD_MAX_BRIGHTNESS   4095u /* FDT: 12-bit external brightness */
++
++enum sweet_lcd_phase {
++    SWEET_LCD_UNMANAGED = 0,
++    SWEET_LCD_INHERITED_LIT,
++    SWEET_LCD_FADING,
++    SWEET_LCD_SOFTWARE_BLACK,
++    SWEET_LCD_BACKLIGHT_GATED,
++    SWEET_LCD_FAULT
++};
++enum sweet_lcd_result {
++    SWEET_LCD_ERROR = -1,
++    SWEET_LCD_OK = 0,
++    SWEET_LCD_DEFERRED = 1
++};
++
++/* Each fact must have independent trusted controller-side evidence. Neither
++ * the Android FDT GPIO spec nor a boot-arg alone asserts these as true. */
++struct sweet_lcd_proof {
++    bool boe_panel_confirmed;
++    bool dsi_video_scanning;
++    bool tlmm57_exclusive_owner;
++    bool tlmm57_is_gpio_output;
++    bool tlmm57_active_high_confirmed;
++};
++
++/* Optional, future, verified backlight-only backend. NO implementation is
++ * installed by patch 0103. Never use this interface for DSI, reset GPIO98,
++ * PMIC GPIO rails, Pinctrl, regulator operations, or brightness PWM writes.
++ * get() must read back current hardware state (not shadow a requested value).
++ */
++struct sweet_lcd_backlight_ops {
++    void *context;
++    bool (*get_enabled)(void *context, bool *enabled);
++    bool (*set_enabled)(void *context, bool enabled);
++};
++
++struct sweet_lcd_state {
++    enum sweet_lcd_phase phase;
++    uint32_t generation;
++    uint16_t requested_brightness;
++    bool selected;               /* requires dizihw && dizilcd && 1600x2560 */
++    bool off_requested;
++};
++
++void sweet_lcd_init(struct sweet_lcd_state *state, bool dizi, bool opt_in,
++    uint32_t width, uint32_t height);
++int sweet_lcd_request(struct sweet_lcd_state *state, bool off,
++    const struct sweet_lcd_proof *proof,
++    const struct sweet_lcd_backlight_ops *ops);
++int sweet_lcd_black_frame_done(struct sweet_lcd_state *state,
++    uint32_t generation, const struct sweet_lcd_proof *proof,
++    const struct sweet_lcd_backlight_ops *ops);
++int sweet_lcd_set_brightness(struct sweet_lcd_state *state, unsigned level);
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/bsd/dev/sweet_lcd.c b/bsd/dev/sweet_lcd.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/sweet_lcd.c
+@@ -0,0 +1,110 @@
++/*
++ * POCO Pad (dizi) BOE LCD power foundation.
++ * Evidence: backup/dizi/live.dts panel qcom,mdss_dsi_n83_35_02_0a_...
++ *  - DSI VIDEO, externally controlled 12-bit backlight (1..0xfff)
++ *  - TLMM GPIO57 backlight-enable; TLMM GPIO98 panel reset
++ *  - FDT reset = {high10ms, low10ms, high10ms} (NOT a suspend sequence)
++ *  - BOE panel-supply-entries = dummy, not the generic LCD power rails.
++ * No DSI engine, brightness generator, reset, rail, or TLMM writer is here.
++ */
++#include "sweet_lcd.h"
++
++static bool
++bl_ready(const struct sweet_lcd_proof *p,
++    const struct sweet_lcd_backlight_ops *ops)
++{
++    return p != 0 && p->boe_panel_confirmed && p->dsi_video_scanning &&
++        p->tlmm57_exclusive_owner && p->tlmm57_is_gpio_output &&
++        p->tlmm57_active_high_confirmed && ops != 0 &&
++        ops->get_enabled != 0 && ops->set_enabled != 0;
++}
++
++/* A failure after a write might have changed the pin: restore its prior
++ * verified state. If undo or its readback fails, permanently fail closed. */
++static bool
++write_verified(struct sweet_lcd_state *s,
++    const struct sweet_lcd_backlight_ops *ops, bool expected, bool target)
++{
++    bool observed = false;
++    if (!ops->get_enabled(ops->context, &observed) || observed != expected)
++        return false;
++    if (ops->set_enabled(ops->context, target) &&
++        ops->get_enabled(ops->context, &observed) && observed == target)
++        return true;
++    if (!ops->set_enabled(ops->context, expected) ||
++        !ops->get_enabled(ops->context, &observed) || observed != expected)
++        s->phase = SWEET_LCD_FAULT;
++    return false;
++}
++
++void
++sweet_lcd_init(struct sweet_lcd_state *s, bool dizi, bool opt_in,
++    uint32_t w, uint32_t h)
++{
++    s->selected = dizi && opt_in && w == SWEET_LCD_DIZI_WIDTH &&
++        h == SWEET_LCD_DIZI_HEIGHT;
++    s->phase = s->selected ? SWEET_LCD_INHERITED_LIT : SWEET_LCD_UNMANAGED;
++    s->generation = 0;
++    s->requested_brightness = SWEET_LCD_MAX_BRIGHTNESS;
++    s->off_requested = false;
++}
++
++int
++sweet_lcd_request(struct sweet_lcd_state *s, bool off,
++    const struct sweet_lcd_proof *p, const struct sweet_lcd_backlight_ops *ops)
++{
++    if (!s->selected || s->phase == SWEET_LCD_UNMANAGED)
++        return SWEET_LCD_DEFERRED;
++    if (s->phase == SWEET_LCD_FAULT)
++        return SWEET_LCD_ERROR;
++    if (off) {
++        if (s->off_requested)
++            return SWEET_LCD_OK;
++        s->off_requested = true;
++        s->generation++;
++        s->phase = SWEET_LCD_FADING;
++        return SWEET_LCD_OK;
++    }
++    /* A saved OFF state is never treated as proof the lamp is disabled. */
++    if (s->phase == SWEET_LCD_BACKLIGHT_GATED) {
++        if (!bl_ready(p, ops) ||
++            !write_verified(s, ops, false, true))
++            return SWEET_LCD_ERROR; /* don't unblank a lamp left off */
++    }
++    if (!s->off_requested)
++        return SWEET_LCD_OK;
++    s->off_requested = false;
++    s->generation++;
++    s->phase = SWEET_LCD_INHERITED_LIT;
++    return SWEET_LCD_OK;
++}
++
++int
++sweet_lcd_black_frame_done(struct sweet_lcd_state *s, uint32_t generation,
++    const struct sweet_lcd_proof *p, const struct sweet_lcd_backlight_ops *ops)
++{
++    if (!s->selected || !s->off_requested ||
++        generation != s->generation || s->phase != SWEET_LCD_FADING)
++        return SWEET_LCD_DEFERRED;
++    s->phase = SWEET_LCD_SOFTWARE_BLACK;
++    /* A black LCD frame is NOT backlight-off.  Keep ABL panel powered
++     * unless a future adapter positively verifies the independent lamp. */
++    if (!bl_ready(p, ops))
++        return SWEET_LCD_DEFERRED;
++    if (!write_verified(s, ops, true, false))
++        return SWEET_LCD_ERROR;
++    s->phase = SWEET_LCD_BACKLIGHT_GATED;
++    return SWEET_LCD_OK;
++}
++
++int
++sweet_lcd_set_brightness(struct sweet_lcd_state *s, unsigned level)
++{
++    if (!s->selected || s->phase == SWEET_LCD_FAULT ||
++        level > SWEET_LCD_MAX_BRIGHTNESS)
++        return SWEET_LCD_ERROR;
++    /* FDT supplies an amplitude range, NOT a trusted DSI/PWM transport.
++     * Persist requested level only; neither 0 nor 4095 writes hardware. */
++    s->requested_brightness = (uint16_t)level;
++    return SWEET_LCD_DEFERRED;
++}
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -20,6 +20,8 @@
+  *      button / auto-lock), else on. Off fades the panel out over a few
+  *      vsyncs (halving each pixel) and keeps it black until on again;
+  *      the panel itself stays powered (AMOLED black pixels are off).
++ *      On the dizi LCD a black framebuffer still leaves its lamp lit.
++ *      The separate guarded BOE state model never claims backlight-off.
+  *   18 IsMainDisplay,
+  *   28 GetDotPitch, 72 Enable/DisableNotifications [func, refcon, type, 0]
+  * Everything else is accepted and logged once.
+@@ -35,6 +37,7 @@
+  * the first swap on (it still reaches the persistent log; panics draw).
+  */
+ #include "SweetSurface.h"
++#include "../../../bsd/dev/sweet_lcd.h"
+ 
+ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ 
+@@ -116,6 +119,7 @@
+ 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
++	struct sweet_lcd_state fDiziLCD; /* no native MMIO backend */
+ 
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+ 	void addClient(IOMobileFramebufferUserClient *client);
+@@ -189,6 +193,15 @@
+ 	}
+ 	fOffX = ((int32_t)fLogicalW - (int32_t)fWidth) / 2;
+ 	fOffY = ((int32_t)fLogicalH - (int32_t)fHeight) / 2;
++	/* Hardware prereqs (BOE panel ID, scanout, GPIO57 ownership and
++	 * polarity) cannot be inferred from an inherited ABL framebuffer.
++	 * Opt-in enables state bookkeeping only: no physical backend exists. */
++	int dizi = 0, lcd = 0;
++	(void)PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
++	(void)PE_parse_boot_argn("dizilcd", &lcd, sizeof(lcd));
++	sweet_lcd_init(&fDiziLCD, dizi == 1, lcd == 1, fWidth, fHeight);
++	fPowerOff = false;
++	fFadeStep = 0;
+ 	fLock = IOLockAlloc();
+ 	fClients = OSArray::withCapacity(4);
+ 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
+@@ -213,6 +226,12 @@
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+ 	setProperty("external", false);
+ 	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
++	if (fDiziLCD.selected) {
++		setProperty("DiziLCDPowerPolicy", "software-black-only");
++		setProperty("DiziLCDPhysicalBacklightAvailable", kOSBooleanFalse);
++		setProperty("DiziLCDPanelResetAvailable", kOSBooleanFalse);
++		setProperty("DiziLCDBrightnessTransportAvailable", kOSBooleanFalse);
++	}
+ 	registerService();
+ 	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+ 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
+@@ -238,8 +257,9 @@
+ 		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
+ 	}
+ 	if (fb->fPowerOff) {
+-		/* Fade out: halve every channel each vsync, then black, then idle. */
++		/* Dizi LCD: black pixels do NOT switch off the physical lamp. */
+ 		uint32_t step = fb->fFadeStep;
++		uint32_t generation = fb->fDiziLCD.generation;
+ 		if (step <= 6) {
+ 			fb->fFadeStep = step + 1;
+ 		}
+@@ -251,6 +271,13 @@
+ 					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
+ 				}
+ 			}
++		}
++		if (step == 6) {
++			IOLockLock(fb->fLock);
++			/* Generation prevents a late off following an intervening wake.
++			 * NULL proof/backend: no GPIO, DSI or regulator writes. */
++			(void)sweet_lcd_black_frame_done(&fb->fDiziLCD, generation, NULL, NULL);
++			IOLockUnlock(fb->fLock);
+ 		}
+ 		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 		return;
+@@ -549,13 +576,19 @@
+ 		if (args->scalarInputCount >= 1) {
+ 			bool off = args->scalarInput[0] == 0;
+ 			IOLockLock(fFB->fLock);
+-			if (off != fFB->fPowerOff) {
++			int lcdResult = sweet_lcd_request(&fFB->fDiziLCD, off, NULL, NULL);
++			if (lcdResult == SWEET_LCD_ERROR) {
++				ret = kIOReturnNotReady;
++			} else if (off != fFB->fPowerOff) {
+ 				fFB->fPowerOff = off;
+ 				fFB->fFadeStep = 0;
+ 				fFB->fDirty = true;     /* on: redraw the latest frame */
+ 			}
+ 			IOLockUnlock(fFB->fLock);
+-			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
++			if (ret == kIOReturnSuccess) {
++				IOLog("SWEET FB: display %s%s\n", off ? "off" : "on",
++				    fFB->fDiziLCD.selected ? " (dizi: software black only; backlight unchanged)" : "");
++			}
+ 		}
+ 		break;
+ 	case kSweetFBSwapWait:
