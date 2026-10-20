@@ -74,6 +74,27 @@ void dizi_input_diag(void)
 		con_hex2("SPI FIFO", "tx=", rd(0xa8ce24), "rx=", rd(0xa8ce28));
 		con_hex2("SPI mode", "dma=", rd(0xa8c258), "fifo-disable=", rd(0xa8c064));
 	}
+#ifdef DIZI_INPUT_GPI
+	/* Live FDT: gpi1 base a00000, ee-offset10000 SUBTRACTED by gpi.c,
+	 * dynamic GPII mask3e. No channel/event commands or DMA submitted. */
+	con_str("GPI", "reading Android-owned context inventory");
+	/* This is an independent optional first-access experiment. A trap or
+	 * permission fault should be correlated with the exact single address;
+	 * no device-visible DMA/command is issued. */
+#ifdef DIZI_INPUT_GPI_SINGLE
+	/* SPI SE9's FDT DMA specifier 0x02 selects static GPII0 (gpi.c). */
+	con_str("GPI", "single read i0 TX context0 at A10000");
+	con_hex("GPI TX0", rd(0xa10000UL));
+#else
+	for (unsigned i = 1; i <= 5; i++) {
+		uintptr_t base = 0x9f0000UL + 0x4000u * i;
+		con_hex2("GPI instance", "id=", i, "tx=", rd(base + 0x20000));
+		con_hex2("GPI channels", "rx=", rd(base + 0x20080), "ev=", rd(base + 0x21000));
+		con_hex2("GPI scratch", "tx=", rd(base + 0x20060), "rx=", rd(base + 0x200e0));
+		con_hex2("GPI status", "irq=", rd(base + 0x23080), "error=", rd(base + 0x23200));
+	}
+#endif
+#endif
 #ifdef DIZI_INPUT_SPI_CLOCK
 	__asm__ volatile("str %w0, [%1]; dsb osh" : : "r"(saved_vote), "r"(vote_reg) : "memory");
 	con_hex("SPI restored", rd(vote_reg));

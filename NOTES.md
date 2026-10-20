@@ -13,6 +13,77 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **Patch0100 (commit `24269ae`): guarded dizi Novatek NT36532 SPI/HID
+  implementation scaffold.** Adds fixed-address ARM64 SE9 MMIO helpers,
+  bounded protocol operations, NT36532 chip/firmware handshake, 108-byte
+  super-resolution report parser with checksum and 10-contact HID dispatch;
+  retains original sweet input path. Activates only with `dizihw=1
+  sweettouch=1`, and the currently verified dizi platform automatically
+  *refuses all SPI transfers* because probe02 read-only FIFO_DISABLE_RO=1,
+  SE9 inherited DMA=1, root clock RCG halted, and GPIO13 mux0 output. Thus
+  there is **no successful physical touch yet**, and this 0100 version does
+  not implement the required GPI1/GPII0 DMA transfer/event rings or IOMMU
+  mapping. Real C translation unit compiled to ARM64 Mach-O with Clang23 and
+  recorded flags, ASan+UBSan host report parser tests passed, 0100 patch
+  applied cleanly and repository validator counted 99 patches. Apple
+  full-kernel build and tablet boot for 0100 still pending. DO NOT set
+  sweettouch=1 on the known-good 0099 image expecting functional touch.
+
+- **2026-10-21 ~01:12 JST: physical-key test image built and temporarily booted.**
+  Existing completed macOS GitHub Actions **39450468892** (fork
+  `omame1203/ios-sweet`, commit `b8602e0`, patch0099) was verified and its
+  kernel downloaded to ignored `xnu/out-0099/`: Mach-O ARM64, SHA-256
+  `ff3f4e974d4b6b46399ac32cd47ce96fb69a47051b5911c9b085bf851dccc4ad`.
+  Reused the known-good WLAN ADT, root on UFS, and board native cmdline,
+  changing only `sweetkeys=1` plus `dizihomekey=1 sweethidtest=60
+  sweethidtestonce=1` while retaining `sweettouch=0`.
+  Private command line: `research/ipad5/cmdline0099-keytest.txt`.
+  Payload `shim/out/dizi/payload-ipados-0099-keytest.bin` SHA-256
+  `543e50d874bebb607f306758ccd5663828fb818b4988fcbe4f72ac62abd130bb`;
+  temporary image `shim/out/dizi/shim-boot-ipados0099-keytest.img` SHA-256
+  `2dbe1f8f62887e23d131ca4cc350b118656a81b0359a02864b7087407e162326`.
+  Embedded payload and boot args were byte-verified. `fastboot boot` accepted
+  send0.379s / boot0.345s, total0.734s. **User reports physical POWER key
+  functioned, with slow response, in the 0099 trial.** This is positive
+  real-hardware evidence for the power-key path. Physical volume-up mapped to
+  Home and volume-down are still unverified, and no event timestamps/latency
+  measurements have been captured. The current cmdline uses `cpus=1`, which
+  may contribute to perceived latency; this causal explanation is untested.
+  This boot
+  contains no Novatek physical touch driver; known-good 0098 image preserved.
+- **Novatek SPI transport investigation:** input probe02 real log shows SE
+  firmware `0x0102`, `dma=1`, `fifo-disable=1`; vendor `spi-msm-geni.c`
+  selects GSI/GPI DMA when FIFO is disabled, requiring suitable DMA rings
+  and translated device addresses. Touch cannot yet be claimed. Existing
+  probe03/04 were only USB logger timeouts, with no remote panic capture;
+  image strings show 03 tested unverified FIFO selector mutation, whereas
+  04 included GPI context reads, so GPI cannot explain both timeouts.
+  Live GPI1 FDT and msm_gpi_mmio.h match the uncommitted GPI context math;
+  registers have not been verified accessible from the bare-metal shim.
+  Prepared isolated optional single-access diagnostic from successful probe02 behavior:
+  `DIZI_INPUT_DIAG=1 DIZI_INPUT_SPI_CLOCK=1 DIZI_INPUT_GPI=1
+  DIZI_INPUT_GPI_SINGLE=1 DIZI_USB_DIAG=1 BOARD=dizi bash shim/build.sh`.
+  Initial probe05 made one read of dynamic GPII1 TX context0 at `0xa14000`;
+  image SHA-256 below is retained but **never booted**. Further vendor
+  `gpi.c` decode shows SE9's DMA specifier option `0x02` means
+  **static GPII0**, channel0 TX/channel1 RX; dynamic GPII1 is not the
+  touchscreen's assigned instance. Corrected focused probe06 makes
+  **one read** of GPII0 TX context0 at PA `0xa10000`, with a preceding
+  screen marker and no GPI commands/ring DMA.
+  Output `shim/out/dizi/shim-boot-input-probe05-single-gpi.img`, SHA-256
+  `87665c87ee5dd29f2ade4b682fd2dbd17c1199b1faaca801eb1fff11385d262d`.
+  Corrected `shim/out/dizi/shim-boot-input-probe06-static-gpi0.img`, SHA-256
+  `ea9246d3ff94ea2af0be6d11a04f4f5ccd6360173640fa2997feaff04dc73867`.
+  Neither image booted; avoid disrupting the current 0099 GUI/key trial.
+  Vendor `gpi.c` allocates 64-entry (1024B) TX/RX TRE rings and a 256-entry
+  (4096B) event ring; both GPI1 (`iommus=0x416`) and QUP wrapper
+  (`iommus=0x403`) require correct DMA/IOVA translation. This remains a
+  kernel-driver blocker, not evidence physical touch works.
+  New `tools/dizi-diag.py --no-android` skips the invalid Android/pstore
+  fallback on a tablet already running iPadOS root; Python syntax and CLI
+  validation passed. Novatek XNU patch0100 and GPI DMA feasibility are still
+  under active implementation/research, not hardware validated.
+
 - **Input probe01 succeeded on hardware**: `logs/dizi-input-probe01.txt`
   (4373 bytes) confirms arbiter v7 `0x70000000`, 768 APIDs, PON PPID0x013
   -> APID0x198, owner0, RT0x10; PM6450 GPIO1 PPID0x188 -> APID0x1b0,

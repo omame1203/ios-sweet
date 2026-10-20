@@ -30,6 +30,14 @@ fi
 if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_SPI_CLOCK:-0}" = 1 ]; then
 	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_SPI_CLOCK"
 fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_GPI:-0}" = 1 ]; then
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_GPI"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_GPI_SINGLE:-0}" = 1 ]; then
+	# Diagnostic: one read of touchscreen's static GPII0 TX context, then USB log.
+	[ "${DIZI_INPUT_GPI:-0}" = 1 ] || { echo "GPI_SINGLE requires DIZI_INPUT_GPI=1" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_GPI_SINGLE"
+fi
 mkdir -p "$OUT"
 objects=()
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c input_diag.c bootlog.c usb_control.c usb_diag.c; do

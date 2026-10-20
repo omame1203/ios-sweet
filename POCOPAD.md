@@ -2,7 +2,8 @@
 
 対象はPOCO Pad 2405CPCFBG（`dizi`、SM7435）。
 参考実装のRedmi Note 10 Pro（`sweet`、SM7150）とは別の機種です。
-**実機でiPadOSのロック画面表示まで確認済みです。ロック解除・ホーム画面の操作・タッチは未対応です。**
+**実機でiPadOSのロック画面とホーム画面の表示を確認済みです。**
+ホーム画面到達には診断用HID Homeイベントを使用しました。0099実機試験では物理電源ボタンの動作をユーザーが確認（反応は遅い）。音量ボタンとタッチは引き続き検証中です。
 
 現在の構成は、既存のブートローダーから一時起動したshimがXNUを読み込む方式です。
 Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
@@ -43,6 +44,9 @@ Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
   イメージのSHA-256は `NOTES.md` に記録。現在はuserdata書き換え後なので、
   Androidへの復帰は前提にせず、FASTBOOT接続を確認して一時起動します。
 - ブートとvendor_bootの両スロットは一時起動前後でハッシュ一致。
+- Novatek NT36532のタッチ報告（108バイト、最大10点）をHIDに変換するパッチ0100を追加。
+  ホスト上でARM64コンパイルと報告パーサの境界検査が通過。現在の実機設定はSPI FIFO無効のため、
+  実タッチを動作させるにはGPI DMAリングとIOMMUアドレス変換の移植が必要です。
 - ローダー実装をASan・UBSan付きで検査。64種類の先頭オフセット、BSS・ADT・起動引数のコピー、
   不正なサイズ・オフセットの拒否を確認。
 - GitHub Actionsで完全なARM64 XNUカーネルをリンク済み。実機で `IOFindBSDRoot` まで到達。
@@ -64,6 +68,8 @@ python3 tools/mkpayload.py xnu/out-0098/kernel.development.sweet \
   shim/out/dizi/dizi-ipad5-wlan.adt shim/out/dizi/payload-ipados.bin --board dizi
 python3 tools/validate-repo.py
 python3 tools/dizi-diag.py --out logs/dizi-diag.txt   # Android復帰を利用するため、Android使用時のみ
+# iPadOSルートに置換済みの場合、USBのみ回収してAndroidへの復帰を待たない
+python3 tools/dizi-diag.py --no-android --image shim/out/dizi/shim-boot-input-probe06-static-gpi0.img --out logs/dizi-input-probe06.txt
 ```
 
 `dizi-wlan-mac.bin` は保存したAndroid実機調査のWi-Fi MACを6バイトのバイナリにした非公開ファイルです。
@@ -74,7 +80,7 @@ Appleファイル、実機デバイスツリー、バックアップ、ビルド
 バックアップを再採取するときは `--out` で新しい保存先を指定します。保存済みの内容は上書きしません。
 取得元・正確なコマンド・ビルド状況は `NOTES.md` の先頭に記録しています。
 
-残作業は、ロック解除・ホーム画面の操作確認、
+残作業は、物理キーとタッチでのロック解除・ホーム画面の操作確認、
 SM7435向けのNovatek SPIタッチ・PMICキー・USBドライバーの移植です。
 参考実装のドライバーは初期試験で無効化します。
 画面のstride・ピクセル形式はロック画面の実機表示で確認済みです。時刻・バッテリー値の正確さは未確認です。
