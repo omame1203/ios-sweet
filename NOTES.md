@@ -5,11 +5,37 @@
 This is a NEW target: POCO Pad 2405CPCFBG, codename `dizi`, SM7435.
 All older instructions/permissions/device paths below concern the upstream
 maintainer's **sweet**, not this tablet. In particular, the old permission
-to erase Android does NOT apply here. No destructive flash is authorized.
+to erase Android does NOT apply here. Separate dizi userdata approval was
+subsequently given and its root image was flashed (checkpoint below). No
+additional destructive flash is authorized.
 The actual objective is native **iPadOS**, using ios-sweet as reference;
 an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
+
+- **Native iPadOS userland and framebuffer swaps now directly captured**:
+  after the user's reset, the existing read-only UFS log-reader shim
+  recovered `logs/ipados-userland-platform-saved.txt` (136810 bytes).
+  SWEETLOG total `0x2dee3`; exported the last 128 KiB, so this is a tail,
+  not the full boot. This supersedes the older no-header observations.
+  Samples 0..4 show SpringBoard[26] and backboardd[56] persisting.
+  backboardd creates BGRA 1536x2048 surfaces 13/14 (stride 6144), then
+  AppleCLCD logs swaps 2..7 with matching full-screen geometry and
+  `display on`. No panic line in the recovered tail. This proves running
+  processes and display requests, NOT a visible home screen or healthy
+  startup. Repeated bluetoothd/fairplayd launches and a stationary
+  SpringBoard main-thread stack still need investigation if GUI stalls.
+- **GUI observation trial issued**: source AppleCLCD::present explicitly
+  leaves the text console drawing over graphics unless
+  `sweetfb_noconsole=1`. Added that one flag to the dizi iPadOS profile;
+  kernel 0097 and all other arguments unchanged. Persistent console
+  logging remains enabled, with panic display retained by the driver.
+  Image `shim/out/dizi/shim-boot-ipados0097-gui.img` SHA-256
+  `2d69fc046c5fba129399c935db16092e40dac04f72b1ae490c88d011ab5a2628`.
+  Payload `payload-ipados-0097-gui.bin`; embedded bytes/flag verified,
+  shim protocol tests and repository validator passed. Product dizi
+  checked; temporary fastboot send/boot accepted 0.379s/0.345s.
+  Awaiting actual display observation. No partition flash performed.
 
 - **launchd exit cause now identified exactly**: user supplied the full
   cs-debug panic: `namespace 9 code 0xe description none`. In this XNU's
@@ -32,8 +58,8 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   against the earlier complete payload. Embedded boot payload also verified.
   Image `shim/out/dizi/shim-boot-ipados0097-platform.img`, SHA-256
   `36a85b756852fa9004e8721751da1decbd55d5f1ccd89bfc0816aad3b5171c67`.
-  Fastboot send/boot accepted 0.379s/0.346s. Awaiting screen observation of
-  `exec launchd`, next userland logs, GUI or next failure. Still no claim
+  Fastboot send/boot accepted 0.379s/0.346s. Superseded by the directly
+  recovered userland log and GUI observation trial above. Still no claim
   of normal userland/GUI success. User transcription's userdata LBA
   `0x35e228` differs from shim-measured `0x35a228`; could be a transcription
   error. Use live GPT, never either transcription as a hardcoded write LBA.

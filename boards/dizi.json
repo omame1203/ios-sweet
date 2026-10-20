@@ -80,5 +80,5 @@
     "clock_source": "https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/2a4b42390bedbbc4e46e4c8e70c84351cf37e78f/drivers/clk/qcom/gcc-parrot.c",
     "status": "FDT resources and matching clock IDs verified; runtime unverified; inherit firmware PHY/clocks"
   },
-  "ipados_cmdline": "debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 launchd_unsecure_cache=1 ufsrw=1 rootrw=1 wdt=-1 wdt_test=no_user_checkin sweetearlyusb=0 sweetusb=0 diziusb=1 dizihw=1 sweetkeys=0 sweettouch=0 sweetlog=1 ufslogsecs=1 cs_debug=1"
+  "ipados_cmdline": "debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 launchd_unsecure_cache=1 ufsrw=1 rootrw=1 wdt=-1 wdt_test=no_user_checkin sweetearlyusb=0 sweetusb=0 diziusb=1 dizihw=1 sweetkeys=0 sweettouch=0 sweetlog=1 ufslogsecs=1 cs_debug=1 sweetfb_noconsole=1"
 }
