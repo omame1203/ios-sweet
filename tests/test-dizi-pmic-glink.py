@@ -14,17 +14,25 @@ assert '#define DIZI_BC_BATT_GET    0x30u' in header
 assert '#define DIZI_BC_USB_GET     0x32u' in header
 assert '#define DIZI_BC_NOTIFY_IND  0x07u' in header
 assert 'DIZI_BC_FULL_MASK' in header
-fdt=(root/'research/ipad5/dizi-live.dts').read_text()
-assert 'qcom,pmic-glink-channel = "PMIC_RTR_ADSP_APPS"' in fdt
-assert '"msm/adsp/charger_pd"' in fdt
-assert 'compatible = "qcom,battery-charger"' in fdt
-linux=(root/'research/xiaomi-ruan/drivers/power/supply/qti_battery_charger.c').read_text()
-for label,constant in [('MSG_OWNER_BC','32778'),('BC_BATTERY_STATUS_GET','0x30'),('BC_USB_STATUS_GET','0x32'),('BC_NOTIFY_IND','0x07')]:
-    assert re.search(r'#define\s+'+label+r'\s+'+constant+r'\b', linux)
-for label,property_id in [('BATT_STATUS',0),('BATT_PRESENT',2),('BATT_CAPACITY',4),('BATT_VOLT_NOW',7),('BATT_CURR_NOW',9),('BATT_TEMP',12),('BATT_CHG_FULL',17)]:
-    src=linux.split('enum battery_property_id {',1)[1].split('};',1)[0]
-    names=[s.split(',')[0].strip().split('=')[0].strip() for s in src.splitlines() if s.strip() and not s.lstrip().startswith('/*')]
-    assert names[property_id]==label, (property_id,label,names[property_id])
+fdt_path=root/'research/ipad5/dizi-live.dts'
+if fdt_path.is_file():
+    fdt=fdt_path.read_text()
+    assert 'qcom,pmic-glink-channel = "PMIC_RTR_ADSP_APPS"' in fdt
+    assert '"msm/adsp/charger_pd"' in fdt
+    assert 'compatible = "qcom,battery-charger"' in fdt
+else:
+    print('SKIP vendor PMIC FDT cross-check (ignored live FDT absent)',flush=True)
+linux_path=root/'research/xiaomi-ruan/drivers/power/supply/qti_battery_charger.c'
+if linux_path.is_file():
+    linux=linux_path.read_text()
+    for label,constant in [('MSG_OWNER_BC','32778'),('BC_BATTERY_STATUS_GET','0x30'),('BC_USB_STATUS_GET','0x32'),('BC_NOTIFY_IND','0x07')]:
+        assert re.search(r'#define\s+'+label+r'\s+'+constant+r'\b', linux)
+    for label,property_id in [('BATT_STATUS',0),('BATT_PRESENT',2),('BATT_CAPACITY',4),('BATT_VOLT_NOW',7),('BATT_CURR_NOW',9),('BATT_TEMP',12),('BATT_CHG_FULL',17)]:
+        src=linux.split('enum battery_property_id {',1)[1].split('};',1)[0]
+        names=[s.split(',')[0].strip().split('=')[0].strip() for s in src.splitlines() if s.strip() and not s.lstrip().startswith('/*')]
+        assert names[property_id]==label, (property_id,label,names[property_id])
+else:
+    print('SKIP vendor PMIC driver cross-check (ignored MiCode absent)',flush=True)
 assert 'dizi_pmic_glink_receive' in patch
 assert 'if (fDizi)' in patch
 assert 'dizi_bc_link(&dizi_bc_telemetry, false, false)' in patch

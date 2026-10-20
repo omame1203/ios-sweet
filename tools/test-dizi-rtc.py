@@ -12,15 +12,23 @@ root = Path(__file__).resolve().parents[1]
 patch = (root/'xnu/patches/0101-dizi-rtc-read.patch').read_text()
 # All RTC logic in this patch is new; extract its added lines exactly.
 src = ''.join(line[1:] for line in patch.splitlines(keepends=True) if line.startswith('+') and not line.startswith('+++'))
-fdt=(root/'research/ipad5/dizi-live.dts').read_text()
-linux=(root/'research/xiaomi-ruan/drivers/rtc/rtc-pm8xxx.c').read_text()
-rtc_node=re.search(r'rtc@6100\s*\{(.*?)\};',fdt,re.S)
-assert rtc_node and 'qcom,pmk8350-rtc' in rtc_node.group(1)
-assert 'reg = <0x6100 0x6200>;' in rtc_node.group(1)
-linux_regs=re.search(r'pmk8350_regs = \{(.*?)\};',linux,re.S)
-assert linux_regs
-for name,value in [('ctrl','0x6146'),('read','0x6148'),('write','0x6140'),('alarm_rw','0x6240')]:
-    assert re.search(fr'\.{name}\s*=\s*{value}\s*,',linux_regs.group(1))
+fdt_path=root/'research/ipad5/dizi-live.dts'
+if fdt_path.is_file():
+    fdt=fdt_path.read_text()
+    rtc_node=re.search(r'rtc@6100\s*\{(.*?)\};',fdt,re.S)
+    assert rtc_node and 'qcom,pmk8350-rtc' in rtc_node.group(1)
+    assert 'reg = <0x6100 0x6200>;' in rtc_node.group(1)
+else:
+    print('SKIP vendor RTC FDT cross-check (ignored live FDT absent)',flush=True)
+linux_path=root/'research/xiaomi-ruan/drivers/rtc/rtc-pm8xxx.c'
+if linux_path.is_file():
+    linux=linux_path.read_text()
+    linux_regs=re.search(r'pmk8350_regs = \{(.*?)\};',linux,re.S)
+    assert linux_regs
+    for name,value in [('ctrl','0x6146'),('read','0x6148'),('write','0x6140'),('alarm_rw','0x6240')]:
+        assert re.search(fr'\.{name}\s*=\s*{value}\s*,',linux_regs.group(1))
+else:
+    print('SKIP vendor RTC driver cross-check (ignored MiCode absent)',flush=True)
 assert 'rtc@6100' in src and '#define DIZI_RTC_PPID          0x061u' in src
 assert '#define DIZI_RTC_CTRL          0x6146u' in src
 assert '#define DIZI_RTC_READ          0x6148u' in src

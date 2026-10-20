@@ -58,6 +58,22 @@ number of touchscreen-specific source files.
 
 ## Engineering order
 
+### Confirmed 0107–0111 complete macOS kernel link (2026-10-21)
+
+GitHub Actions `39470099403` passed against `e1ab9a4` after adding all five
+new XNU patches. Downloaded kernel artifact `xnu/out-0111/kernel.development.sweet`
+has SHA-256 `e2f5111ed22b2441be0b8d9fc2009567abd8371047bbbf65dcefa17669384dd4`
+(17,283,736 bytes, ARM64 Mach-O), validated against the workflow's own
+`SHA256SUMS`. This is full source compile/link only; real SMMU DMA,
+GLINK/battery, LCD rails/backlight, touch, 8-core SMP, Wi-Fi/BT, or UFS
+cold-start operation remain unverified. No hardware actions occurred.
+
+An Ubuntu `.github/workflows/dizi-host.yml` was prepared locally for
+patch-extracted code, ASan/UBSan and AArch64 cross-compilation from a clean
+source checkout. GitHub rejected its push because the active OAuth token
+lacks the `workflow` scope; this extra CI workflow is NOT installed remotely.
+The host tests themselves passed locally with no ignored device assets.
+
 ### Additional non-device XNU integration (0107–0111)
 
 * `0107`: optional dizi 4-A55/4-A78 ADT/XNU topology metadata. The
@@ -86,8 +102,8 @@ number of touchscreen-specific source files.
 The above changes were applied to the archived full-XNU 0106 buildtree;
 their C translation units produced ARM64 Mach-O objects with recorded
 Apple compiler flags, while affected C++ sources passed syntax-only
-compatibility checks. A separate macOS Actions full kernel link for the
-expanded patchset must be verified before claiming new build success.
+compatibility checks. The subsequent macOS Actions full kernel link
+for this expanded patchset is now confirmed above (`39470099403`).
 No device actions occurred during this integration.
 
 ### Full XNU build verification (2026-10-21, no tablet access)

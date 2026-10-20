@@ -13,6 +13,29 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21 0107–0111 FULL MACOS XNU BUILD SUCCESS, NO DEVICE:**
+  macOS GitHub Actions `39470099403`, commit `e1ab9a402712060af69d7d95989c18deb3a6848e`,
+  `MACHINE_CONFIG=SWEET`/`DEVELOPMENT`, success (kernel build/link and
+  artifact uploads). Downloaded `xnu-kernel` into ignored `xnu/out-0111/`.
+  `SHA256SUMS` verified `kernel.development.sweet`: genuine ARM64 Mach-O
+  executable, 17,283,736 bytes, SHA-256
+  `e2f5111ed22b2441be0b8d9fc2009567abd8371047bbbf65dcefa17669384dd4`.
+  https://github.com/omame1203/ios-sweet/actions/runs/39470099403.
+  This proves source compile/link, NOT physical GLINK/SMMU/SPI/RTC/LCD/USB/SMP.
+  Default `cpus=1` remains, unverified controllers hard-disabled; no
+  adb/fastboot/boot/flash/device action was performed.
+
+- **2026-10-21 clean-checkout host test portability:** `tests/test-dizi-port.py`
+  can run against `git archive HEAD` with no ignored vendor blobs after
+  updating RTC and PMIC 0101/0105 tests to conditionally check vendor
+  FDT/MiCode when actually present; real patch-extracted C/host tests still
+  execute without those optional provenance files. A LOCAL Ubuntu
+  `.github/workflows/dizi-host.yml` was prepared to automate host sanitizers,
+  AArch64 cross-compile and patch validation; GitHub rejected its push
+  because the current OAuth authentication lacks the `workflow` scope.
+  This workflow is not yet registered remotely. The independently verified
+  macOS full XNU CI described above remains successful.
+
 - **2026-10-21 source integration commit/CI:** `e1ab9a4` adds 0107–0111 plus source-only tests; pushed to `fork/pocopad-dizi`. Pre-push `tools/validate-repo.py`, full `tests/test-dizi-port.py`, individual 0107/0108/0109/0110/0111 host suites, SHA256SUMS for previously successful 0106 kernel, and `git diff --check` all passed. New macOS full XNU build workflow run `39470099403` at https://github.com/omame1203/ios-sweet/actions/runs/39470099403 completed **success** for `e1ab9a4`; downloaded ignored `xnu/out-0111/kernel.development.sweet` (17,283,736 bytes, ARM64 Mach-O executable) with `SHA256SUMS` verification, SHA-256 `e2f5111ed22b2441be0b8d9fc2009567abd8371047bbbf65dcefa17669384dd4`. This confirms complete source compile/link for 0107–0111, not physical hardware operation. No boot, hardware access, or flash.
 
 - **2026-10-21 software-only 0107–0111 integration checkpoint (NEW Mac
