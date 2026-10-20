@@ -1,0 +1,45 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -911,16 +911,32 @@
+ 	thread_t thread;
+ 
+ 	ud.dwc = dwc;
+-	if (kmem_alloc_contig(kernel_map, &ud.dma, UD_SIZE, PAGE_MASK, 0, 0,
+-	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+-		printf("SWEET USB: no DMA memory\n");
+-		return;
++	if (sweet_usb_dizi) {
++		/*
++		 * The ABL fastboot SMMU mapping covers the low boot-image region
++		 * (the shim used 0xA8020000 successfully). Do not allocate a new
++		 * contiguous buffer here: on dizi the DWC3 cannot DMA to the
++		 * kernel heap buffer and descriptor reads time out (-110).
++		 */
++		ud.dma_pa = 0xa8020000ULL;
++		ud.dma = ml_io_map(ud.dma_pa, UD_SIZE);
++		if (ud.dma == 0) {
++			printf("SWEET USB: dizi DMA map failed\n");
++			return;
++		}
++		bzero((void *)ud.dma, UD_SIZE);
++	} else {
++		if (kmem_alloc_contig(kernel_map, &ud.dma, UD_SIZE, PAGE_MASK, 0, 0,
++		    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++			printf("SWEET USB: no DMA memory\n");
++			return;
++		}
++		ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)ud.dma);
++		if (!pn) {
++			return;
++		}
++		ud.dma_pa = ptoa_64(pn);
+ 	}
+-	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)ud.dma);
+-	if (!pn) {
+-		return;
+-	}
+-	ud.dma_pa = ptoa_64(pn);
+ 	ud_if_create();
+ 
+ 	/* Device controller soft reset (PHY and global setup stay as ABL left them). */
