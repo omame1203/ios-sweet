@@ -1,0 +1,19 @@
+diff --git a/osfmk/arm/io_map.c b/osfmk/arm/io_map.c
+--- a/osfmk/arm/io_map.c
++++ b/osfmk/arm/io_map.c
+@@ -72,6 +72,15 @@
+ static void
+ io_map_init(void)
+ {
++	/*
++	 * The dizi kernel image ends at 0xfffffff0084c4c68, but the first
++	 * free kernel_map address used by kmem_suballoc is inside the
++	 * __TEXT_EXEC segment (observed 0xfffffff007b00000). Pin the IO
++	 * submap above the linked image so DMA buffers cannot overlap the
++	 * kernel text/data.
++	 */
++	io_range.min_address = 0xfffffff008500000ULL;
++	io_range.max_address = io_range.min_address + IO_MAP_SIZE;
+ 	vm_map_will_allocate_early_map(&io_submap);
+ 	io_submap = kmem_suballoc(kernel_map, &io_range.min_address, IO_MAP_SIZE,
+ 	    VM_MAP_CREATE_NEVER_FAULTS | VM_MAP_CREATE_DISABLE_HOLELIST,

@@ -1,0 +1,82 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -271,6 +271,38 @@
+ 	uint64_t    rx_frames, tx_frames;
+ } ud;
+ 
++/* The dizi fixed DMA buffer is mapped Device-nGnRnE via ml_io_map; only
++ * naturally aligned accesses are allowed. Copy through 32-bit words. */
++static void
++ud_dma_write(void *dst, const void *src, size_t n)
++{
++	volatile uint8_t *d = dst;
++	const uint8_t *s = src;
++	while (n >= 4 && ((uintptr_t)d & 3) == 0) {
++		uint32_t v = (uint32_t)s[0] | ((uint32_t)s[1] << 8) |
++		    ((uint32_t)s[2] << 16) | ((uint32_t)s[3] << 24);
++		*(volatile uint32_t *)d = v;
++		d += 4; s += 4; n -= 4;
++	}
++	while (n--)
++		*d++ = *s++;
++}
++
++static void
++ud_dma_read(void *dst, const void *src, size_t n)
++{
++	uint8_t *d = dst;
++	const volatile uint8_t *s = src;
++	while (n >= 4 && ((uintptr_t)s & 3) == 0) {
++		uint32_t v = *(const volatile uint32_t *)s;
++		d[0] = (uint8_t)v; d[1] = (uint8_t)(v >> 8);
++		d[2] = (uint8_t)(v >> 16); d[3] = (uint8_t)(v >> 24);
++		d += 4; s += 4; n -= 4;
++	}
++	while (n--)
++		*d++ = *s++;
++}
++
+ static inline void
+ dwc_wr(uint32_t off, uint32_t v)
+ {
+@@ -474,7 +506,7 @@
+ 		uint32_t words[4] = { 0x474c4f50u, (uint32_t)sweet_log_position(),
+ 		    (uint32_t)sweet_log_oldest(), 0 };
+ 		n = length < 16 ? length : 16;
+-		memcpy(data, words, n);
++		ud_dma_write(data, words, n);
+ 	} else if (type == 0xc0 && req == 0x51 && length > 0) {
+ 		uint64_t total = sweet_log_position(), oldest = sweet_log_oldest();
+ 		uint64_t pos = value | ((uint64_t)index << 16);
+@@ -492,8 +524,8 @@
+ 		ok = false;
+ 	} else if (req == 6) {          /* GET_DESCRIPTOR */
+ 		switch (value >> 8) {
+-		case 1: memcpy(data, ud_dev_desc, sizeof(ud_dev_desc)); n = sizeof(ud_dev_desc); break;
+-		case 2: memcpy(data, ud_cfg_desc, sizeof(ud_cfg_desc)); n = sizeof(ud_cfg_desc); break;
++		case 1: ud_dma_write(data, ud_dev_desc, sizeof(ud_dev_desc)); n = sizeof(ud_dev_desc); break;
++		case 2: ud_dma_write(data, ud_cfg_desc, sizeof(ud_cfg_desc)); n = sizeof(ud_cfg_desc); break;
+ 		case 3: n = ud_string(value & 0xff, data); ok = n != 0; break;
+ 		default: ok = false; break;
+ 		}
+@@ -569,7 +601,7 @@
+ 		    mbuf_mclget(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m) == 0 &&
+ 		    (mbuf_flags(m) & MBUF_EXT) && mbuf_maxlen(m) >= len) {
+ 			struct ifnet_stat_increment_param stats = {};
+-			memcpy(mbuf_data(m), (const void *)(ud.dma + UD_RX), len);
++			ud_dma_read(mbuf_data(m), (const void *)(ud.dma + UD_RX), len);
+ 			mbuf_setlen(m, len);
+ 			mbuf_pkthdr_setlen(m, len);
+ 			void *frame_header = mbuf_data(m);
+@@ -601,7 +633,9 @@
+ 			mbuf_freem(m);
+ 			continue;
+ 		}
+-		mbuf_copydata(m, 0, len, (void *)(ud.dma + UD_TX));
++		uint8_t txf[ETHER_MAX_LEN];
++		mbuf_copydata(m, 0, len, txf);
++		ud_dma_write((void *)(ud.dma + UD_TX), txf, len);
+ 		mbuf_freem(m);
+ 		/* A frame of a multiple of 512 bytes would need a zero-length
+ 		 * packet to end it; one pad byte does the same (IP ignores it). */
