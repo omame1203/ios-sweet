@@ -13,6 +13,17 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **0098 full build running**: commit `7c82a2e`, Actions run
+  **39445471430**, https://github.com/omame1203/ios-sweet/actions/runs/39445471430 .
+  Do not start a duplicate or cancel for an observation timeout. On success
+  download xnu-kernel to `xnu/out-0098`, verify artifact SHA256SUMS, build
+  actual iPad ADT payload using dizi profile plus `sweetnetid=1` and
+  `sweetsample=SpringBoard,backboardd,lsd,launchservicesd,installd`.
+  Temporary fastboot only; observe GUI and recover new stored sample if
+  still blocked. Current reusable log reader remains
+  `shim-boot-ufs-log-reader.img`. Tablet should be in fastboot after reader,
+  but check product live. No signature bypass/reflash is needed for 0098.
+
 - **0098 candidate: publish the existing virtual USB NIC identity to IOKit**.
   Latest capture `logs/ipados-lsd-saved.txt` (136810 bytes; total
   `0x25249`) includes lsd[89] sample 0. Symbolicated report:
