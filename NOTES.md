@@ -11,6 +11,30 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 iPadOS root flash in flight (user approved userdata
+  overwrite).** The host-verified iPadOS 16.7.16 root sha256
+  `3151ac6b683b3b1cea1f1adbc8938141c64e660592fb4e25c89774821cf4bf07`
+  was converted to an 11 GiB sparse image and is being flashed to
+  `userdata`. `fastboot flash -S 512M` was rejected by the ABL
+  (max-download-size); the retry uses `-S 128M` (fastboot pid 72101,
+  started ~20:22 local). Android userdata is being erased; bootloaders,
+  recovery, modem, persist and the existing backups are untouched.
+- The boot for the real root is ready: 0090 kernel sha256
+  `1cc8ab18bc4215ae804ba35da4abe558e3c34fa6379529a6005e11e7c698ed38`
+  (0088 bsd_init markers + 0089 HFS markers + 0090 fixed USB DMA) packed
+  with `shim/out/dizi/dizi-ipad5.adt` and cmdline
+  `rd=ufsroot0 ufsrw=1 rootrw=1 sweetearlyusb=1 sweetusb=2 diziusb=1
+  dizihw=1 sweetkeys=0 sweettouch=0 sweetlog=1`, yielding
+  `shim/out/dizi/shim-boot.img` (16.8 MB). The EP0 logger is already
+  waiting (pid 72316, `logs/kernel-ufs.out`; output target
+  `logs/kernel-ufs.txt`). After the flash: `fastboot boot
+  shim/out/dizi/shim-boot.img`, then watch the USB EP0 console and the
+  panel for the UFS HFS mount, `/sbin/launchd`, backboardd/SpringBoard.
+  The empty 16 MiB test root already proved the kernel reaches
+  `load_init_program`/`/sbin/launchd` (errno 2) and `IOFindBSDRoot`.
+- Not done: real launchd/userland/GUI, Novatek SPI touch, PMIC keys,
+  display bring-up for SpringBoard. The goal is not complete.
+
 - **2026-10-20 CI #3 (proper 0087 CNTP fix) succeeded** at head
   `3e315d0`; kernel SHA-256
   `b66f09e9b41e3f945cbceacdaeac7d855a1f40c9d082fc9910773c3e4c917990`,
