@@ -11,6 +11,23 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 XNU reaches AMFI registration on dizi (screen evidence).** The
+  latest NOP-CNTP 0085 boot shows kernel init, VM, scheduler/IPC, thread and
+  crypto providers, ending with:
+  `SWEET PPNG: HMAC-SHA256 registered`, `SWEET pthread: Libpthread-514.100.2
+  registered`, `SWEET AMFI: built-in interface registered (XML
+  entitlements)`. No launchd/IOKit userland log is visible; the device hangs
+  after this point. The early USB hook/EP0 log did not start, so the hang is
+  before `net_init_run()`. This is kernel bring-up progress, not an iPadOS
+  boot.
+- In `bsd_init.c`, AMFI registration is followed by `sweet_hfs_register()`
+  and then proc_uuid/mbinit/audit/knote/eventhandler/... markers. **Patch
+  0088** enables the existing `DEBUG_BSDINIT` markers (`DEBUG_BSDINIT 1`)
+  so the next screen shows the last completed `bsd_init` stage. It passes
+  the CI-flag syntax check and applies cleanly. The 0087 proper CNTP patch
+  is still building in CI run 39411363502; the binary NOP test was a
+  temporary shortcut only.
+
 - **2026-10-20 XNU executed on the POCO Pad (screen evidence).** After the
   first temporary XNU payload boot, the user observed on the tablet:
   `kprintf initialized`, `pe_arm_map_interrupt_controller`,
