@@ -1,0 +1,122 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -104,6 +104,8 @@
+ 	uint64_t dma_pa;
+ 	uint8_t lun;
+ 	uint8_t tag;
++	bool sense_valid;
++	uint8_t sense_key, sense_asc, sense_ascq;
+ 	uint64_t first_block, nblocks;          /* partition, in 4 KiB device blocks */
+ 	uint32_t secsize;                       /* logical sector size for the BSD layer */
+ 	bool writable;                          /* boot-arg ufsrw=1 */
+@@ -141,6 +143,31 @@
+ 	clean_dcache64((addr64_t)(su.dma_pa + off), len, TRUE);
+ }
+ 
++/* Normalize fixed and descriptor sense without reading past supplied bytes. */
++static bool
++ufs_sense_decode(const uint8_t *s, unsigned len, uint8_t *key, uint8_t *asc, uint8_t *ascq)
++{
++	if (!len) {
++		return false;
++	}
++	switch (s[0] & 0x7f) {
++	case 0x70: case 0x71:
++		if (len < 14 || s[7] < 6) {
++			return false;
++		}
++		*key = s[2] & 15; *asc = s[12]; *ascq = s[13];
++		return true;
++	case 0x72: case 0x73:
++		if (len < 4) {
++			return false;
++		}
++		*key = s[1] & 15; *asc = s[2]; *ascq = s[3];
++		return true;
++	default:
++		return false;
++	}
++}
++
+ /*
+  * One SCSI command in slot 0, data (if any) to/from the bounce buffer
+  * (to the device when write is set). Returns 0 or an errno.
+@@ -153,6 +180,7 @@
+ 	uint64_t ucd_pa = su.dma_pa + DMA_UCD, bounce_pa = su.dma_pa + DMA_BOUNCE;
+ 
+ 	assert(len <= BOUNCE_SIZE);
++	su.sense_valid = false;
+ 	bzero(utrd, sizeof(*utrd));
+ 	bzero(ucd, sizeof(*ucd));
+ 
+@@ -249,17 +277,32 @@
+ 
+ 	uint32_t ocs = utrd->dw2 & 0xff;
+ 	uint32_t status = ucd->resp[7];
+-	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6]) {
++	if (ocs || ucd->resp[0] != 0x21) {
+ 		printf("SWEET UFS: command 0x%02x failed: ocs 0x%x upiu 0x%x response 0x%x status 0x%x\n",
+ 		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], status);
+ 		return EIO;
+ 	}
+ 	if (status == 0x02) {
+-		printf("SWEET UFS: command 0x%02x check condition\n", cdb[0]);
++		/* The target may set response=1 together with CHECK CONDITION.
++		 * Inspect its embedded sense before classifying the failure; do not
++		 * discard it or overwrite it with a new REQUEST SENSE command. */
++		unsigned segment = ((unsigned)ucd->resp[10] << 8) | ucd->resp[11];
++		unsigned slen = ((unsigned)ucd->resp[32] << 8) | ucd->resp[33];
++		unsigned available = segment >= 2 ? MIN(segment - 2, sizeof(ucd->resp) - 34) : 0;
++		available = MIN(available, slen);
++		su.sense_valid = ufs_sense_decode(ucd->resp + 34, available,
++		    &su.sense_key, &su.sense_asc, &su.sense_ascq);
++		printf("SWEET UFS: command 0x%02x LUN %u check condition response 0x%x sense len %u/%u\n",
++		    cdb[0], su.lun, ucd->resp[6], slen, segment);
++		if (su.sense_valid) {
++			printf("SWEET UFS: inline sense key 0x%x ASC 0x%02x ASCQ 0x%02x\n",
++			    su.sense_key, su.sense_asc, su.sense_ascq);
++		}
+ 		return EAGAIN;
+ 	}
+-	if (status) {
+-		printf("SWEET UFS: command 0x%02x status 0x%x\n", cdb[0], status);
++	if (status || ucd->resp[6]) {
++		printf("SWEET UFS: command 0x%02x response 0x%x status 0x%x\n",
++		    cdb[0], ucd->resp[6], status);
+ 		return EIO;
+ 	}
+ 	return 0;
+@@ -273,8 +316,14 @@
+ 	int error = ufs_scsi(cdb, sizeof(cdb), 252, false);
+ 	if (!error) {
+ 		const uint8_t *s = (const uint8_t *)(su.dma + DMA_BOUNCE);
+-		printf("SWEET UFS: sense 0x%02x/0x%02x/0x%02x key %u\n",
+-		    s[0], s[12], s[13], s[2] & 0xf);
++		su.sense_valid = ufs_sense_decode(s, 252,
++		    &su.sense_key, &su.sense_asc, &su.sense_ascq);
++		if (su.sense_valid) {
++			printf("SWEET UFS: requested sense key 0x%x ASC 0x%02x ASCQ 0x%02x\n",
++			    su.sense_key, su.sense_asc, su.sense_ascq);
++		}
++	} else {
++		printf("SWEET UFS: REQUEST SENSE failed (%d)\n", error);
+ 	}
+ 	return error;
+ }
+@@ -291,8 +340,14 @@
+ 		if (len && write) {
+ 			return error;
+ 		}
+-		(void)ufs_request_sense();
+-		delay(10);
++		if (!su.sense_valid) {
++			(void)ufs_request_sense();
++		}
++		/* Retry unit attention/not-ready, not permanent media/CDB errors. */
++		if (su.sense_valid && su.sense_key != 6 && su.sense_key != 2) {
++			return EIO;
++		}
++		delay(10000);
+ 	}
+ 	return error;
+ }

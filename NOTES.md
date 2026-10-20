@@ -11,22 +11,72 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
-- **2026-10-20 USB panic root cause: the IO submap overlaps the dizi
-  kernel image.** The 0091 hardware boot reached `SWEET USB: ue0 up` then
-  panicked with the same pc/lr (`0xfffffff007bd7fdd`/`0xfffffff007bd7fd4`,
-  unaligned data abort). The panic printed `ud.dma` =
-  `0xfffffff007b00000`. The kernel's `__TEXT_EXEC` is
-  `0xfffffff0072e4000`..`0xfffffff007b38000` and the linked image ends at
-  `0xfffffff0084c4c68`, so `io_map_init()`'s `kmem_suballoc(kernel_map,
-  ...)` placed the IO submap inside kernel code. DMA zero/copy writes
-  corrupted the kernel; 0091 (32-bit zero) and 0092 (aligned copies) do
-  not change the destination.
-- **Patch 0093** pins `io_range.min_address`/`max_address` in
-  `osfmk/arm/io_map.c` to `0xfffffff008500000` + 8 MiB before the
-  suballoc, above the linked image. 0092 is kept for the Device-mapped
-  DMA copies. CI run 39417412938 builds both; hardware result pending.
-  The iPadOS root is already in `userdata`; after the IO map fix the
-  UFS boot must reach `/sbin/launchd` and be verified over the screen/USB.
+- **2026-10-20 follow-up: 0095 still fails before sense handling.** CI
+  39429370296 completed successfully at 5e9a88a; local kernel SHA-256
+  `5da7866310dbdb0d3b893b8d07b232d0ed6171a0c096b3c47fcb54f8ea6fb825`.
+  Payload checked byte-for-byte inside boot-v4 image, boot SHA-256
+  `9d2fb45d65b987af43250b0d2dfb783e39301dfd15710a9db51827d13b621e04`.
+  Temporary boot accepted (send 0.379s, boot 0.347s); EP0 logger timed out
+  without enumeration. Host dmesg again shows descriptor -110/address -71.
+  User supplied the missing response fields from the screen: commands
+  0x00 and 0x28 both `ocs=0 upiu=0x21 response=1 status=2`; no sense values.
+  They describe these values as present in the first iPad log, so do not
+  assume the transcription proves a new/different 0095 failure.
+- **0096 fixes a definite error-path bug:** 0095 checks response!=0 BEFORE
+  status=CHECK CONDITION, thus never inspects sense for this observed tuple.
+  0096 logs/decodes embedded UPIU sense first, with response/length details;
+  handles fixed and descriptor sense, falls back to REQUEST SENSE only when
+  needed, retries unit-attention/not-ready (10 ms) but no writes and no
+  permanent-media/illegal-request retries. Nonzero response with GOOD status
+  still fails. Matching Linux ufshcd handles SCSI status and copies inline
+  sense in this path (pinned MiCode ruan source in research/ruan-source).
+  Genuine arm64 Mach-O compile passed using buildtree 39429370296,
+  `python3 tools/xnu-buildtree-cc.py research/bt0095 bsd/dev/sweet_ufs.c
+  --objects research/objs0096`. This is not yet a hardware storage fix.
+
+
+- **2026-10-20 0094 hardware result.** The USB panic is gone; XNU now
+  reaches `IOFindBSDRoot`. The host saw the gadget connect for the first
+  time (high-speed, then full-speed) but every EP0 control transfer
+  failed (`descriptor read/64 error -110`, then SET_ADDRESS error -71),
+  so the kernel EP0 log never enumerated. The screen shows
+  `SWEET UFS: command 0x00 failed ... status 0x2` and
+  `SWEET UFS root ufsroot0 unavailable: 5`: the UFS link and host are
+  alive, and TEST UNIT READY gets SCSI CHECK CONDITION. The UFS setup
+  aborted before reading the GPT.
+- **Patch 0095** treats SCSI status 0x02 as retryable: REQUEST SENSE is
+  issued (sense key/ASC/ASCQ printed), read/control commands retry up to
+  5 times, and a failed TUR is logged but no longer aborts, so a readable
+  GPT can still be found. CI run 39429370296 builds it; hardware result
+  pending.
+- **Open issue: XNU EP0 enumeration.** The DWC3 fixes the DMA panic but
+  the device does not answer GET_DESCRIPTOR. The next UFS boot should
+  reveal whether `SWEET USB: setup ...` lines appear on screen; if not,
+  inspect the event-ring thread/registration, not the SMMU.
+
+- **2026-10-20 corrected USB panic diagnosis (screen photo of 0093).**
+  The earlier statement that the IO submap overlapped kernel text was
+  wrong: this kernel uses ARM_LARGE_MEMORY, so its image is at
+  `0xfffffe0006000000`+ and `kernel_map` spans
+  `0xfffffe0000000000`..`0xfffffffbffffffff`. The 0093 pin
+  `0xfffffff008500000` lies outside `kernel_map`; the real panic was
+  `kmem_suballoc(map=0xfffffe000dbb0ec8, size=8388608) failed with 1
+  @vm_kern.c:1116` (KERN_INVALID_ADDRESS). The range table printed
+  `io_submap: 0xfffffe7ac0b68000 - 0xfffffe7ac0d6c000`; the assigned
+  submap was valid all along.
+- **2026-10-20 real 0090/0091 USB panic (earlier screen photo).** After
+  `SWEET USB: ue0 192.168.7.2/24 up` and `soft reset done`, XNU panicked
+  with `phystokv_range: illegal PA: 0xa8021000; phys base 0x8c0000000,
+  size 0xb0000000 @arm_vm_init.c:406`. The fixed DMA IOVA `0xa8020000`
+  is outside XNU's managed RAM; `ud_sync()`'s `flush_dcache64` by PA
+  walks `phystokv_range` and panics. DMA zero/copy alignment was not the
+  root cause.
+- **Patch 0093 removed; patch 0094** keeps the fixed low DMA (ABL's
+  SMMU maps it) but skips the PA cache flush when `diziusb=1`, leaving a
+  `dsb`. The buffer is Device-mapped by `ml_io_map`, so it is uncached.
+  CI run 39427116134 builds the revert + 0094; hardware result pending.
+  With `sweetusb=0` the kernel should instead proceed to the UFS root.
+  The iPadOS root is already in `userdata`.
 
 - **2026-10-20 iPadOS root flash in flight (user approved userdata
   overwrite).** The host-verified iPadOS 16.7.16 root sha256
