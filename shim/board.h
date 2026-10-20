@@ -15,6 +15,16 @@
 /* ramoops: 2 MiB total - 512 KiB console - 1 MiB pmsg = 512 KiB dump. */
 #define BOARD_LOG_BASE 0x80d80000UL
 #define BOARD_LOG_SIZE 0x80000UL
+/* ruan-u-oss gcc-parrot.c; clock IDs agree with dizi's live USB FDT. */
+#define BOARD_USB_GCC 0x00100000UL
+#define BOARD_USB_GDSCR 0x49004
+#define BOARD_USB_MASTER_CBCR 0x49018
+#define BOARD_USB_IFACE_CBCR 0x49084
+#define BOARD_USB_AGGRE_CBCR 0x49088
+#define BOARD_USB_UTMI_CBCR 0x49024
+#define BOARD_USB_SLEEP_CBCR 0x49020
+#define BOARD_USB_DWC 0x0a600000UL
+#define BOARD_USB_QSCRATCH 0x0a6f8800UL
 #else
 #define BOARD_NAME "sweet (Redmi Note 10 Pro SM7150)"
 #define BOARD_FB_BASE 0x9c000000UL

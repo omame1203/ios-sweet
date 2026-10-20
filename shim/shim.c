@@ -12,6 +12,7 @@
 #include "loader.h"
 #include "ufs.h"
 #include "bootlog.h"
+#include "usb_diag.h"
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -52,10 +53,26 @@
 #define wsr(r, v) __asm__ volatile("msr " r ", %0" : : "r"((uint64_t)(v)))
 #define isb() __asm__ volatile("isb" ::: "memory")
 
-static inline uint32_t rd32(uintptr_t a) { return *(volatile uint32_t *)a; }
-static inline uint64_t rd64(uintptr_t a) { return *(volatile uint64_t *)a; }
-static inline void wr32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
-static inline void wr8(uintptr_t a, uint8_t v) { *(volatile uint8_t *)a = v; }
+/* MMIO must use a single register without address writeback: a hypervisor
+ * can reject post-indexed accesses because their abort syndrome has ISV=0.
+ * Both failing dizi priority stores (byte and word) used post-indexing.
+ * Keep address arithmetic outside the instruction, as Linux readl/writel do. */
+static inline uint32_t rd32(uintptr_t a)
+{
+	uint32_t v;
+	__asm__ volatile("ldr %w0, [%1]" : "=r"(v) : "r"(a) : "memory");
+	return v;
+}
+static inline uint64_t rd64(uintptr_t a)
+{
+	uint64_t v;
+	__asm__ volatile("ldr %0, [%1]" : "=r"(v) : "r"(a) : "memory");
+	return v;
+}
+static inline void wr32(uintptr_t a, uint32_t v)
+{
+	__asm__ volatile("str %w0, [%1]" : : "r"(v), "r"(a) : "memory");
+}
 
 extern char secondary_entry[];
 
@@ -64,6 +81,11 @@ static volatile uint64_t sec_mpidr[NR_CPUS];
 static volatile uint64_t sec_probe[4];	/* CPU1 redistributor write test */
 static volatile uint32_t irq_count, irq_other, irq_last;
 static volatile int irq_src;
+/* Saved before mutation so the panic screen never needs fresh MMIO reads. */
+static struct {
+	uint64_t base, typer;
+	uint32_t dist_ctlr, dist_typer, dist_iidr, waker, group, priority;
+} gic_state;
 
 /* ICC_SGI1R_EL1 value targeting the calling core only. */
 static uint64_t sgi_self(unsigned id)
@@ -133,8 +155,10 @@ static void irq_handler(void)
 		irq_other++;
 	if (id == VTIMER_INTID)
 		wsr("cntv_tval_el0", rsr("cntfrq_el0") / 100);	/* 10 ms */
+#ifndef BOARD_DIZI
 	else if (id == PTIMER_INTID)
 		wsr("cntp_tval_el0", rsr("cntfrq_el0") / 100);
+#endif
 	wsr("icc_eoir1_el1", iar);
 	isb();
 }
@@ -160,7 +184,14 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 	con_hex("SPSR", rsr("spsr_el1"));
 	con_hex("X0", regs[0]);
 	con_hex("X1", regs[1]);
-	con_hex("X30", regs[29]);	/* stashed lr is just above the frame */
+	con_hex("X30", regs[31]);	/* 30-slot save area, then x29 and x30 */
+	if (gic_state.base) {
+		con_hex("GICR", gic_state.base);
+		con_hex("R TYPER", gic_state.typer);
+		con_hex2("GICD", "ctlr=", gic_state.dist_ctlr, "type=", gic_state.dist_typer);
+		con_hex2("GIC", "iidr=", gic_state.dist_iidr, "waker=", gic_state.waker);
+		con_hex2("GIC pre", "grp=", gic_state.group, "pri=", gic_state.priority);
+	}
 	reset(40);
 }
 
@@ -177,7 +208,9 @@ void secondary_main(uint64_t idx)
 			sec_probe[0] = rd32(r + GICR_IGROUPR0);
 			wr32(r + GICR_IGROUPR0, 0xffffffff);
 			sec_probe[1] = rd32(r + GICR_IGROUPR0);
-			wr8(r + GICR_IPRIORITYR + 19, 0xa0);
+			/* Match the word accesses used by XNU and GIC init in Linux. */
+			uint32_t pri = rd32(r + GICR_IPRIORITYR + 16);
+			wr32(r + GICR_IPRIORITYR + 16, (pri & 0x00ffffff) | 0xa0000000);
 			sec_probe[2] = rd32(r + GICR_IPRIORITYR + 16);
 		}
 		sec_probe[3] = r ? 1 : 0xdead;
@@ -241,10 +274,13 @@ static void irq_window(const char *label, uintptr_t r, int src)
 	if (src == VTIMER_INTID) {
 		wsr("cntv_tval_el0", f / 100);
 		wsr("cntv_ctl_el0", 1);
-	} else if (src == PTIMER_INTID) {
+	}
+#ifndef BOARD_DIZI
+	else if (src == PTIMER_INTID) {
 		wsr("cntp_tval_el0", f / 100);
 		wsr("cntp_ctl_el0", 1);
 	}
+#endif
 	isb();
 	/* sample state with IRQs still masked, after the first period */
 	uint64_t t = now() + f / 50;
@@ -253,7 +289,12 @@ static void irq_window(const char *label, uintptr_t r, int src)
 	if (src == SGI_INTID)
 		wsr("icc_sgi1r_el1", sgi_self(SGI_INTID));
 	isb();
-	ist = src == PTIMER_INTID ? rsr("cntp_ctl_el0") : rsr("cntv_ctl_el0");
+	if (src == VTIMER_INTID)
+		ist = rsr("cntv_ctl_el0");
+#ifndef BOARD_DIZI
+	else if (src == PTIMER_INTID)
+		ist = rsr("cntp_ctl_el0");
+#endif
 	pend = rd32(r + GICR_ISPENDR0);
 	act = rd32(r + GICR_ISACTIVER0);
 	isr = rsr("isr_el1");
@@ -271,8 +312,15 @@ static void irq_window(const char *label, uintptr_t r, int src)
 			next += f / 100;
 		}
 	__asm__ volatile("msr daifset, #2" ::: "memory");
-	wsr("cntv_ctl_el0", 0);
-	wsr("cntp_ctl_el0", 0);
+	/* Stop only the timer used in this window. Dizi's CNTP access is
+	 * unproven and trapped during the first virtual timer trial. */
+	stage = "gic timer cleanup";
+	if (src == VTIMER_INTID)
+		wsr("cntv_ctl_el0", 0);
+#ifndef BOARD_DIZI
+	else if (src == PTIMER_INTID)
+		wsr("cntp_ctl_el0", 0);
+#endif
 	isb();
 
 	con_hex2(label, "irqs=", irq_count, "other=", irq_other);
@@ -296,6 +344,9 @@ static void test_gic(void)
 
 	stage = "gic dist";
 	uint32_t dctlr = rd32(GICD_BASE);
+	gic_state.dist_ctlr = dctlr;
+	gic_state.dist_typer = rd32(GICD_BASE + 4);
+	gic_state.dist_iidr = rd32(GICD_BASE + 8);
 	/* Non-secure view (DS=0): bit0 EnableGrp1, bit1 EnableGrp1A, bit4 ARE_NS; Linux writes 0x13 */
 	wr32(GICD_BASE, dctlr | 0x13);
 	gicd_wait_rwp();
@@ -307,6 +358,8 @@ static void test_gic(void)
 		con_str("GICR", "not found");
 		return;
 	}
+	gic_state.base = r;
+	gic_state.typer = rd64(r + GICR_TYPER);
 	uint32_t waker = rd32(r + GICR_WAKER);
 	if (waker & 2) {
 		wr32(r + GICR_WAKER, waker & ~2U);
@@ -314,18 +367,34 @@ static void test_gic(void)
 			;
 	}
 	con_hex2("GICR", "base=", r, "waker=", rd32(r + GICR_WAKER));
+	gic_state.waker = rd32(r + GICR_WAKER);
+	if (gic_state.waker & 6) {
+		con_str("GIC", "redistributor asleep; probe skipped");
+		return;
+	}
 
 	stage = "gic config";
 	uint32_t grp = rd32(r + GICR_IGROUPR0);
 	wr32(r + GICR_IGROUPR0, 0xffffffff);	/* NS view: secure bits are WI */
 	uint32_t en_before = rd32(r + GICR_ISENABLER0);
 	uint32_t pri_before = rd32(r + GICR_IPRIORITYR + 16);	/* INTIDs 16..19 */
-	for (int id = 0; id < 32; id++)
-		wr8(r + GICR_IPRIORITYR + id, 0xa0);
-	wr32(r + GICR_ISENABLER0, (1U << VTIMER_INTID) | (1U << PTIMER_INTID) | (1U << SGI_INTID));
+	gic_state.group = grp;
+	gic_state.priority = pri_before;
+	/* Boots 02/03 aborted on post-indexed STRB/STR at the first word.
+	 * Width alone did not fix it. wr32 now prevents address writeback. */
+	stage = "gic priority words";
+	for (int id = 0; id < 32; id += 4)
+		wr32(r + GICR_IPRIORITYR + id, 0xa0a0a0a0);
+	__asm__ volatile("dsb sy" ::: "memory");
+	con_hex2("PRIORITY", "was=", pri_before, "now=", rd32(r + GICR_IPRIORITYR + 16));
+	con_hex2("GROUP", "was=", grp, "now=", rd32(r + GICR_IGROUPR0));
+	stage = "gic enable";
+	uint32_t sources = (1U << VTIMER_INTID) | (1U << SGI_INTID);
+#ifndef BOARD_DIZI
+	sources |= (1U << PTIMER_INTID);
+#endif
+	wr32(r + GICR_ISENABLER0, sources);
 	con_hex2("ENABLE", "was=", en_before, "now=", rd32(r + GICR_ISENABLER0));
-	(void)grp;
-	(void)pri_before;
 
 	uint64_t ctlr = rsr("icc_ctlr_el1");
 	wsr("icc_ctlr_el1", ctlr & ~2ULL);	/* EOImode 0: EOIR also deactivates */
@@ -375,7 +444,7 @@ static uint32_t to_us(uint64_t ticks)
 
 void shim_main(uint64_t dtb)
 {
-	struct mmu_info mi;
+	struct mmu_info mi = {0};
 	bootlog_init();
 #ifdef BOARD_DIZI
 	/* First prove the architectural assumptions. Do not run sweet's UFS,
@@ -404,8 +473,15 @@ void shim_main(uint64_t dtb)
 		con_hex("SCTLR", mi.sctlr_after);
 		con_hex("PAR img", mmu_probe((uintptr_t)shim_main));
 		con_hex("PAR fb", mmu_probe(FB_PHYS));
+		if (dizi_rc == 0) mmu_disable(&mi);
 	}
-	con_str("PROBE", "GIC probe completed; Android reboot in 20s");
+	stage = "dizi USB diagnostic";
+#ifdef DIZI_USB_DIAG
+	usb_diag_run(20000);
+#else
+	con_str("USB", "DMA diagnostic disabled by default");
+#endif
+	con_str("PROBE", "diagnostics finished; Android reboot in 20s");
 	reset(20);
 #endif
 

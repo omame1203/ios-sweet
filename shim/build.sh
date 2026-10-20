@@ -11,9 +11,13 @@ case "$BOARD" in
 	dizi) OUT=out/dizi; BOARD_FLAGS=-DBOARD_DIZI ;;
 	*) echo "Unsupported BOARD: $BOARD" >&2; exit 1 ;;
 esac
+if [ "$BOARD" = dizi ] && [ "${DIZI_USB_DIAG:-0}" = 1 ]; then
+	# Opt in only after verifying DWC3's inherited SMMU/DMA mapping.
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_USB_DIAG"
+fi
 mkdir -p "$OUT"
 objects=()
-for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c bootlog.c; do
+for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c bootlog.c usb_control.c usb_diag.c; do
 	$CC $CFLAGS $BOARD_FLAGS -c "$f" -o "$OUT/${f%.*}.o"
 	objects+=("$OUT/${f%.*}.o")
 done

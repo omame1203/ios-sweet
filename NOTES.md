@@ -11,6 +11,68 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 resumed after the prior pause, diagnostic boot 05**: the user
+  explicitly asked to continue. Preserved all partitions and existing changes.
+  In `shim/shim.c`, the dizi build excludes CNTP register operations in the
+  timer IRQ handler and diagnostic windows, reads/stops only the selected
+  timer, and enables VTIMER+SGI without the physical timer PPI. Previous boot
+  04 ELR `0xa8001abc` identified an unconditional `msr cntp_ctl_el0,x0`
+  during virtual-timer cleanup; the revised ARM64 shim ELF was disassembled
+  and **contains no `cntp_` register references**.
+- Experimental DWC3 USB DMA is **off by default** for dizi until the inherited
+  SMMU mapping and PHY/clocks are validated. `DIZI_USB_DIAG=1 BOARD=dizi bash
+  shim/build.sh` explicitly opts in, but this mode is still unverified on
+  hardware. Default `BOARD=dizi bash shim/build.sh` leaves the USB diagnostic
+  inactive. The DTS declares a DWC3 IOMMU, so a physical DMA address by itself
+  is not proof of a valid device-visible mapping.
+- Default diagnostic boot 05 image SHA-256:
+  `815912ec0c5271a08e4ec275489bb591b54ecc144a7d864160e6bbae3b181ce8`.
+  Its `Image` SHA-256 is
+  `a7c9fd73e91631b51fd900108c7ed8d45e0d81d6958e48e8506b71d75b09c5ad`.
+  `fastboot boot shim/out/dizi/shim-boot.img` returned Sending OKAY (0.007s),
+  Booting OKAY (0.345s), total 0.353s. The device returned to rooted Android
+  16, slot `_b`, with `sys.boot_completed=1` and working adb. `/sys/fs/pstore`
+  was empty after return, but **the user supplied a matching physical-screen
+  photograph** (PXL_20261020_095955651.jpg) documenting the following:
+  `LOADER no SWEETXNU payload` (expected for empty diagnostic ramdisk),
+  `GICD was=000000D0 now=000000D3`, redistributor `17260000` awake,
+  `PRIORITY now=A0A0A0A0`, `ENABLE now=08000002`,
+  `ICC grpen1=00000001`, `VTIMER irqs=0000001E other=00000000`
+  (30 expected virtual-timer interrupts), with last INTID `0000001B`
+  (=27), and `SGI1 irqs=0000000A other=00000000` (10 expected SGIs).
+  `MMU16K rc=00000000 tables=00000001`, both image/framebuffer PAR
+  translation values shown, `USB DMA diagnostic disabled by default`,
+  `PROBE diagnostics finished; Android reboot in 20s`, `RESET in 20s`.
+  **The GIC IRQ delivery/counts, SGI, MMU enable/probes and normal diagnostic
+  completion are now physically verified on boot 05.** This is a shim-only
+  result: it does not prove an XNU kernel link/boot or iPadOS GUI operation.
+- Local host validation: DIZI shim compiled, loader ASan+UBSan tested with 64
+  prefix cases, FDT board/clock validation passed, `tools/validate-repo.py`
+  passed, `git diff --check` clean. GitHub CLI remains unauthenticated, and a
+  prior `gh auth login` process was present; no Actions run dispatched.
+- After integrating reviewed USB control fixes, both the default dizi build
+  and the opt-in `DIZI_USB_DIAG=1` build completed; the final generated
+  `shim/out/dizi/shim-boot.img` is **USB-off** SHA-256
+  `08b43a9b8d8de72e5c0e623b5d6ba3fb7bdc1267f7bd8188060337da1811d566`.
+  This updated artifact was **not** hardware-booted. The exact boot 05 tested
+  image/ELF/Image are separately preserved in ignored
+  `backup/dizi/diag-05-vtimer-no-cntp/` with matching older hash above.
+- XNU GIC fixed-address MMIO patch `0083-sweet-gic-fixed-address-mmio.patch`
+  was committed as `2624c03`. It applies with `git apply --check` and
+  `patch --dry-run --fuzz=0` on the 0082 tree. Clang23 compiled `pe_fiq.c`
+  as a real ARM64 Mach-O object with the recorded CI flags, and disassembly
+  shows no writeback LDR/STR in the patched GIC access path; real XNU runtime
+  is not yet tested. USB EP0 request validation, status event routing and
+  5-clock guards pass ASan/UBSan + 10,000 random host requests and AArch64
+  object compilation; the DMA/SMMU path is still unverified on the tablet.
+- A read-only host build audit confirms that saved CI buildtree lacks all
+  1,093 `.o` entries in `link.filelist`, both installed Clang versions lack
+  `__builtin_xnu_type_summary` (and related typed allocator builtins), and
+  local linker inputs `libcc_kext`/`libfirehose_kernel` are unavailable.
+  Thus no complete correct dizi XNU link is currently possible with the
+  local Linux-only material. Full native kernel/iPadOS boot still blocked;
+  use a complete Xcode/macOS CI build once authentication becomes available.
+
 - Initial port implementation commit: `c4d8f06` on branch `pocopad-dizi`.
 - Diagnostic boot 02 SHA-256:
   `9db98a27282291ee3604af7203ce80a606d1d8b615d94074f6be97585a2aa9ab`.
@@ -69,8 +131,9 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   `backup/dizi/diag-04-gic-vtimer-abort/`; do not rebuild over this evidence.
   Panic register dump also fixes LR index to regs[31] (regs[29] was padding)
   and preserves pre-write GIC state without extra MMIO in the exception.
-- **User paused the goal after boot 04 and requested recording only.**
-  Do not reboot the tablet or resume implementation until explicitly resumed.
+- The user had paused after boot 04, then explicitly resumed the task on
+  2026-10-20. The earlier pause restriction is superseded; continue with
+  non-destructive diagnostics only. Preserve all Android/Windows partitions.
 - USB diagnostic code is implemented but not yet hardware-verified. It runs
   after GIC/MMU; all observed GIC panics occur before USB, so logger timeout does
   not diagnose USB. Host logger boot-03 was PID 51670; check authoritative

@@ -130,3 +130,16 @@ uint64_t mmu_probe(uintptr_t va)
 	__asm__ volatile("at s1e1r, %0; isb" : : "r"(va) : "memory");
 	return rsr("par_el1");
 }
+
+/* Return the diagnostic shim to ABL's MMU-off state before USB DMA. The
+ * identity mappings let the same code/stack continue at their physical
+ * addresses. Clean the entire image, including BSS, tables and stacks. */
+void mmu_disable(const struct mmu_info *info)
+{
+	uint64_t line = 4UL << ((rsr("ctr_el0") >> 16) & 0xf);
+	for (uintptr_t p = info->img_lo; p < info->img_hi; p += line)
+		__asm__ volatile("dc cvac, %0" : : "r"(p) : "memory");
+	__asm__ volatile("dsb sy" ::: "memory");
+	wsr("sctlr_el1", info->sctlr_before);
+	__asm__ volatile("isb; tlbi vmalle1; dsb sy; isb" ::: "memory");
+}

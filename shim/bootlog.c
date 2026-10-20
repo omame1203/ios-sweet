@@ -35,7 +35,21 @@ void bootlog_puts(const char *s)
 	}
 	__asm__ volatile("dsb sy" ::: "memory");
 }
+
+unsigned bootlog_snapshot(uint8_t *out, unsigned capacity)
+{
+	if (!logbuf)
+		return 0;
+	const unsigned ring_size = BOARD_LOG_SIZE - sizeof(struct ram_log);
+	unsigned n = logbuf->size < capacity ? logbuf->size : capacity;
+	unsigned start = (logbuf->start + ring_size - n) % ring_size;
+	for (unsigned i = 0; i < n; i++)
+		out[i] = logbuf->data[(start + i) % ring_size];
+	return n;
+}
 #else
 void bootlog_init(void) {}
 void bootlog_puts(const char *s) { (void)s; }
+unsigned bootlog_snapshot(uint8_t *out, unsigned capacity)
+{ (void)out; (void)capacity; return 0; }
 #endif
