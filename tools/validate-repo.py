@@ -5,7 +5,7 @@
 
 Checks:
   1. Patch sequence in xnu/patches/:
-     - Sequential numbering starting at 0001 with no duplicates or gaps.
+     - Sequential numbering starting at 0001, excluding documented retirements.
      - Patch files are non-empty and have valid unified diff markers.
   2. Python script syntax:
      - All tools/*.py compile cleanly via py_compile.
@@ -15,6 +15,10 @@ Checks:
 import argparse, glob, os, py_compile, re, subprocess, sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 0093 was removed by be256d7: its fixed IO submap address was outside
+# kernel_map on ARM_LARGE_MEMORY. Keep later patch/build identities stable.
+RETIRED_PATCHES = {93}
 
 
 def green(text): return f"\033[92m{text}\033[0m"
@@ -54,11 +58,16 @@ def validate_patches(verbose=False):
             if not ('--- ' in head or 'diff ' in head or 'Index:' in head):
                 errors.append(f"Patch missing standard diff header: {fname}")
 
-    # Check contiguous sequence
+    for num in RETIRED_PATCHES & seen_numbers.keys():
+        errors.append(f"Retired patch {num:04d} must not be restored")
+
+    # Only the explicitly retired numbers may be absent.
     if seen_numbers:
         sorted_nums = sorted(seen_numbers.keys())
         expected = 1
         for num in sorted_nums:
+            while expected in RETIRED_PATCHES:
+                expected += 1
             if num != expected:
                 errors.append(f"Gap in patch sequence: expected {expected:04d}, found {num:04d} ({seen_numbers[num]})")
                 expected = num + 1
@@ -71,7 +80,7 @@ def validate_patches(verbose=False):
             print(f"    - {err}")
         return False
 
-    print(green(f"[✓] Validated {len(patch_files)} patches (0001-{len(patch_files):04d} contiguous, format OK)"))
+    print(green(f"[✓] Validated {len(patch_files)} patches (through {max(seen_numbers):04d}, documented retirements excluded, format OK)"))
     return True
 
 

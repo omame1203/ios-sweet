@@ -11,6 +11,14 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **0096 full kernel build running:** CI run 39435889409, head cfe7b69,
+  https://github.com/omame1203/ios-sweet/actions/runs/39435889409 .
+  Exact sense decoder extracted from compiled C also passed ASan+UBSan host
+  tests for unit-attention, not-ready, illegal-request, fixed/descriptor
+  sense and all truncated lengths. Forward/reverse patch applicability
+  checked against the 0095 source. The existing validator initially failed
+  because removed patch 0093 leaves an intentional gap; it now permits only
+  that documented retirement and still rejects all other gaps/duplicates.
 - **2026-10-20 follow-up: 0095 still fails before sense handling.** CI
   39429370296 completed successfully at 5e9a88a; local kernel SHA-256
   `5da7866310dbdb0d3b893b8d07b232d0ed6171a0c096b3c47fcb54f8ea6fb825`.
