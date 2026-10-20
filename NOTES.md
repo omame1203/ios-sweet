@@ -13,6 +13,93 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **MILESTONE 2026-10-21: native iPadOS LOCK SCREEN visually verified**.
+  User photo `/home/steam/Downloads/PXL_20261020_152532603.jpg` clearly
+  shows SpringBoard's date/clock, battery icon and "Press home to open";
+  the latest direct-WLAN ADT trial reaches graphical lock screen, unlike
+  the previous Apple-logo boots. This verifies actual GUI rendering on
+  POCO Pad, not merely processes/swaps. Still NOT a verified home screen
+  or usable input: sweetkeys=0/sweettouch=0 remain deliberate because the
+  sweet hardware drivers do not match dizi. Do not reset this running GUI
+  just to collect another log. Date/time and battery readings are not
+  calibrated/verified by this display; initial clock is near Unix epoch.
+- Reusable known-good GUI image:
+  `shim/out/dizi/shim-boot-ipados0098-wlan.img` SHA-256
+  `9d468c57f3e3b54e27ec77167332ba9f3d212ceab1676ee47cf99cdfd87dcf99`.
+  Kernel 0098 SHA-256
+  `be516ad14539853d2bf6313c427e91d8393c3d2949fdbf7c25e03e171c138de6`,
+  CI 39445471430 at 7c82a2e. ADT `dizi-ipad5-wlan.adt`, private six-byte
+  real Android WLAN MAC input `research/ipad5/dizi-wlan-mac.bin`.
+  `sweetnetid` is OFF: the successful change is the direct named wlan nub
+  carrying the real local-mac-address, which avoids MobileGestalt's
+  unsatisfied asynchronous network-controller discovery. No userland
+  patching or signature bypass was added. Exact flags in payload header
+  and `research/ipad5/cmdline0098.txt` minus `sweetnetid=1`.
+- NEXT if continuing toward an operable home screen: port a dizi input
+  path (real PMIC keys and/or Novatek SPI touch) from measured hardware;
+  do NOT simply turn on the sweet PM6150/FocalTech drivers. Current GUI
+  prompts for Home, but the tablet has no physical Home button and input
+  is disabled. A controlled HID Home event could diagnose unlock before
+  completing touch, but has not been implemented or tested. Native USB
+  networking/enumeration, RTC, real battery reporting and SMP are still
+  unfinished. Preserve the successful artifact and backups. Host read-only
+  HFS verification mount now unmounted; no new flash.
+
+- **0098 identity service publishes, but does NOT resolve the wait**:
+  `logs/ipados0098-netid-saved.txt` (136810 bytes) still samples lsd in
+  the same MobileGestalt network wait. Expanded read-only reader now
+  exports up to **384 KiB**, leaving 128 KiB of the measured 512 KiB RAM
+  console for shim diagnostics; hardware recovered the whole 0x26c2b-byte
+  native log in `logs/ipados0098-netid-full-saved.txt` (164501 bytes).
+  Early `SWEET NETID: published offline USB Ethernet identity` confirms
+  the opt-in service starts, but IOK lsd still gets no sdio/wlan/marconi-wifi
+  named service and blocks through IONetworkController notification.
+  Do not assert that publishing the class alone fixed startup; keep
+  `sweetnetid` OFF in the default profile and subsequent direct-MAC trial.
+- **Direct real-WLAN metadata trial booted 00:22:08 JST**: the saved rooted
+  Android getprop snapshot includes a valid unicast `ro.ril.oem.wifimac`.
+  Extracted privately as six bytes to `research/ipad5/dizi-wlan-mac.bin`
+  (0600), never printed/tracked. `mkadt.py --board dizi --wlan-mac-file FILE`
+  optionally adds a generic wlan nub with local-mac-address and an explicit
+  identity-only marker, no registers/driver. This supplies the earlier
+  IONameMatch wlan lookup used by MobileGestalt directly; actual Wi-Fi
+  networking remains unimplemented. Invalid addresses/non-dizi rejected;
+  absent option preserves the original tree byte-for-byte with fixed seed.
+  Parsed property checked against the private snapshot.
+- ADT `shim/out/dizi/dizi-ipad5-wlan.adt`; native kernel 0098 unchanged,
+  payload `payload-ipados-0098-wlan.bin`; netid flag removed, samples/IOK
+  trace retained. Boot image `shim/out/dizi/shim-boot-ipados0098-wlan.img`,
+  SHA-256 `9d468c57f3e3b54e27ec77167332ba9f3d212ceab1676ee47cf99cdfd87dcf99`.
+  Embedded payload compared and no netid flag verified; shim host checks
+  passed. Product dizi checked; temporary send/boot 0.379s/0.348s.
+  User lock-screen photo confirms GUI success (milestone above).
+  No partition flash or userland file/signature modification performed.
+- Expanded diagnostic reader preserved as
+  `shim/out/dizi/shim-boot-ufs-log-reader384.img`, SHA-256
+  `da37e13649b332050607d386bb22b045c12484ad4be5738692a28467c7acc10d`.
+  Its successful second read boot 0.007s/0.348s. Use this named image for
+  future captures (generic shim-boot.img has since been rebuilt as native).
+  Host read-only root was mounted for symbolication and is now unmounted. First old reader's 128 KiB image is preserved.
+
+- **0098 built and tested; still Apple logo (user observation)**:
+  CI **39445471430** at `7c82a2e` succeeded (5m26s). Downloaded
+  `xnu/out-0098/kernel.development.sweet`, artifact SHA256SUMS verified;
+  SHA-256 `be516ad14539853d2bf6313c427e91d8393c3d2949fdbf7c25e03e171c138de6`.
+  Native payload `payload-ipados-0098-netid.bin`, image
+  `shim/out/dizi/shim-boot-ipados0098-netid.img`, SHA-256
+  `dcbcbc0ba39fc9ac27fd9846f379de33e4a81bb97097ca395e4537ef3be6c739`.
+  Explicit `sweetnetid=1`, samples for SpringBoard/backboardd/lsd/
+  MobileGestaltHelper/installd, IOKit logging for lsd/MobileGestaltHelper/
+  SpringBoard/backboardd; otherwise GUI board profile unchanged.
+  Embedded payload byte-compared; shim host checks passed. Live product
+  dizi confirmed; temporary send/boot 0.379s/0.343s at 00:13:51 JST.
+  User reported Apple logo persists after >4 minutes. This does not yet
+  show whether the network identity wait was resolved. User reset again;
+  log-reader send/boot accepted 0.007s/0.347s, capturing to
+  `logs/ipados0098-netid-saved.txt` (reader session 21237, stdout redirected).
+  Next: inspect IOK lsd matches/properties and sampled stacks before any
+  further fix. No flash performed; generic shim-boot.img currently native0098.
+
 - `tools/sweet-crash.py --symbols-only CACHE ROOT REPORT` now implements
   the working per-image resolver without ipsw's failing all-cache ObjC
   pass. Also separates concatenated SMP/CRASH lines and caches repeated
@@ -23,7 +110,7 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   thread lines. Legacy invocation/default a2s path retained. Repository
   validator and diff whitespace pass. Read-only test mount unmounted.
 
-- **0098 full build running**: commit `7c82a2e`, Actions run
+- **0098 full build (completed, result above)**: commit `7c82a2e`, Actions run
   **39445471430**, https://github.com/omame1203/ios-sweet/actions/runs/39445471430 .
   Do not start a duplicate or cancel for an observation timeout. On success
   download xnu-kernel to `xnu/out-0098`, verify artifact SHA256SUMS, build

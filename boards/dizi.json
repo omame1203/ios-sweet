@@ -13,7 +13,7 @@
     "width": 1600,
     "height": 2560,
     "stride": 6400,
-    "status": "Reservation and panel mode verified; splash stride/format awaiting diagnostic observation"
+    "status": "Native iPadOS lock screen visually verified 2026-10-21; BGRA stride 6400 with centered 1536x2048 logical canvas"
   },
   "gic": [
     "0x17200000",

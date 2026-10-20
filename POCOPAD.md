@@ -2,7 +2,7 @@
 
 対象はPOCO Pad 2405CPCFBG（`dizi`、SM7435）。
 参考実装のRedmi Note 10 Pro（`sweet`、SM7150）とは別の機種です。
-**XNU・launchd・SpringBoard・backboarddの実機実行を確認済みです。ホーム画面の表示・操作は未確認です。**
+**実機でiPadOSのロック画面表示まで確認済みです。ロック解除・ホーム画面の操作・タッチは未対応です。**
 
 現在の構成は、既存のブートローダーから一時起動したshimがXNUを読み込む方式です。
 Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
@@ -26,8 +26,10 @@ Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
   診断shimでSTART STOP UNITによりACTIVEへ切り替えると、GPT・userdata・HFSX署名を読み取れました。
   パッチ0097を組み込んだXNUでも、ユーザーの実機ログで `iOSRoot` のHFSマウントとlaunchd実行試行を確認。
   launchdの終了理由 `EXEC/WRONG_PLATFORM` を特定し、参照実装の起動引数で先へ進みました。
-  保存ログの回収に成功し、SpringBoard・backboarddと1536×2048の描画要求を確認。
-  デバッグ文字の重ね描きを止める設定で、実際の画面表示を確認中です。
+  保存ログを回収し、SpringBoardがLaunchServicesのデータベース初期化を待っていると特定。
+  その先でMobileGestaltがネットワークMAC情報を待っていました。保存済みの実機Wi-Fi MACを
+  ADTの `wlan/local-mac-address` に渡すことで進み、2026-10-21の実機写真でロック画面を確認。
+  これは識別情報の公開で、Wi-Fi通信ドライバーの実装ではありません。
 - 19領域のバックアップを端末側SHA-256と照合。
 - 診断shimの実機画面を確認。GIC優先度設定時の例外は、アドレス自動更新なしのMMIO命令で通過。
   仮想タイマー終了時の `CNTP_CTL_EL0` 例外も、使用していない物理タイマーへのアクセスを除いて解消しました。
@@ -55,23 +57,27 @@ export PATH="$PWD/../host-tools/platform-tools:$PATH"
 python3 tools/pocopad-probe.py --backup
 python3 tools/check-dizi-board.py backup/dizi/fdt
 BOARD=dizi bash shim/build.sh
-python3 tools/mkadt.py shim/out/dizi/dizi-ipad5.adt --board dizi
+python3 tools/mkadt.py shim/out/dizi/dizi-ipad5-wlan.adt --board dizi \
+  --wlan-mac-file research/ipad5/dizi-wlan-mac.bin
 # 実際のiPadOSルートを使うペイロード（起動引数をボード設定から取得）:
-python3 tools/mkpayload.py xnu/out-0097/kernel.development.sweet \
-  shim/out/dizi/dizi-ipad5.adt shim/out/dizi/payload-ipados.bin --board dizi
+python3 tools/mkpayload.py xnu/out-0098/kernel.development.sweet \
+  shim/out/dizi/dizi-ipad5-wlan.adt shim/out/dizi/payload-ipados.bin --board dizi
 python3 tools/validate-repo.py
 python3 tools/dizi-diag.py --out logs/dizi-diag.txt   # Android復帰を利用するため、Android使用時のみ
 ```
+
+`dizi-wlan-mac.bin` は保存したAndroid実機調査のWi-Fi MACを6バイトのバイナリにした非公開ファイルです。
+MAC情報を省略すると、アプリ一覧の初期化待ちが再発する可能性があります。
 
 機種情報の抽出元は `research/ipad5/j71sap.adt` です。Apple配布IPSWから取り出した実ファイルが必要です。
 Appleファイル、実機デバイスツリー、バックアップ、ビルド生成物はGitに含めません。
 バックアップを再採取するときは `--out` で新しい保存先を指定します。保存済みの内容は上書きしません。
 取得元・正確なコマンド・ビルド状況は `NOTES.md` の先頭に記録しています。
 
-残作業は、ホーム画面の表示・ユーザー空間の起動完了の確認、
+残作業は、ロック解除・ホーム画面の操作確認、
 SM7435向けのNovatek SPIタッチ・PMICキー・USBドライバーの移植です。
 参考実装のドライバーは初期試験で無効化します。
-画面のstride・ピクセル形式も、予約領域とパネル寸法だけでは確定できないため実機確認が必要です。
+画面のstride・ピクセル形式はロック画面の実機表示で確認済みです。時刻・バッテリー値の正確さは未確認です。
 
 userdataには承認を受けてiPadOSルートイメージを書き込み済みです。
 Windows/ESP、ブートローダー、リカバリ、校正領域を保護し、追加の消去は行いません。

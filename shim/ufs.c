@@ -180,10 +180,11 @@ static int name_is(const char *a, const char *b)
 #ifdef DIZI_UFS_LOG
 /* Read the existing XNU console tail from the end of userdata. No recovery
  * or Android mount is required. Its header/layout is shared with sweet-log.py.
- * Export at most 128 KiB, leaving space in the shim's RAM console ring. */
+ * Export at most 384 KiB, leaving 128 KiB for the shim diagnostics in
+ * its 512 KiB RAM console ring. */
 static void previous_xnu_log(uint64_t first, uint64_t last)
 {
-	const uint32_t ring_size = 4u << 20, max_tail = 128u << 10;
+	const uint32_t ring_size = 4u << 20, max_tail = 384u << 10;
 	if (last < first || last - first < 1024 || last > 0xffffffff) return;
 	uint32_t base = (uint32_t)last - 1024;
 	if (read_blocks(base, 1, data)) return;

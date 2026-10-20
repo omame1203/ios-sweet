@@ -69,12 +69,16 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False, board='sweet', identity=None, product_adt=None):
+def build(seed=None, qemu=False, highmem=False, board='sweet', identity=None, product_adt=None,
+          wlan_mac=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     if board not in ('sweet', 'dizi'):
         raise ValueError(f'unknown board {board}')
+    if wlan_mac is not None:
+        if board != 'dizi' or len(wlan_mac) != 6 or wlan_mac == bytes(6) or wlan_mac[0] & 1:
+            raise ValueError('wlan_mac requires dizi and a six-byte nonzero unicast address')
     identity = identity or ('ipad5' if board == 'dizi' else 'iphone-x')
     if identity == 'ipad5':
         model, hwmodel, target, chip = 'iPad6,11', 'J71sAP', 'J71s', 0x8000
@@ -246,6 +250,14 @@ def build(seed=None, qemu=False, highmem=False, board='sweet', identity=None, pr
     product_props = d22ap_product(product_adt)
     product = [node('product', [ph()] + product_props)] if product_props else []
 
+    # MobileGestalt first looks for a wlan service's local-mac-address when
+    # constructing device identity. Supply the tablet's saved Android Wi-Fi
+    # address, without claiming a working Wi-Fi driver or adding MMIO access.
+    # Keep per-device values in a private input file, never in the board JSON.
+    wlan = [node('wlan', [ph(), ('compatible', cstr('dizi,wlan-identity')),
+                         ('local-mac-address', wlan_mac),
+                         ('dizi,identity-only', u32(1))])] if wlan_mac is not None else []
+
     # Identity of the iPhone X whose userland runs here: compatible[0] is
     # hw.model/hw.target (D22AP), model is hw.machine/hw.product
     # (iPhone10,3). 'xiaomi,sweet' stays for SweetPlatformExpert matching.
@@ -258,7 +270,7 @@ def build(seed=None, qemu=False, highmem=False, board='sweet', identity=None, pr
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
+    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + wlan + ([] if qemu else [ufs]))
 
 
 if __name__ == '__main__':
@@ -267,12 +279,15 @@ if __name__ == '__main__':
     parser.add_argument('--board', choices=('sweet', 'dizi'), default='sweet')
     parser.add_argument('--identity', choices=('iphone-x', 'ipad5'))
     parser.add_argument('--product-adt')
+    parser.add_argument('--wlan-mac-file', type=Path,
+                        help='Private six-byte raw dizi Wi-Fi MAC saved from Android')
     parser.add_argument('--dump', action='store_true')
     parser.add_argument('--qemu', action='store_true')
     parser.add_argument('--highmem', action='store_true')
     args = parser.parse_args()
     root = build(qemu=args.qemu, highmem=args.highmem, board=args.board,
-                 identity=args.identity, product_adt=args.product_adt)
+                 identity=args.identity, product_adt=args.product_adt,
+                 wlan_mac=args.wlan_mac_file.read_bytes() if args.wlan_mac_file else None)
     blob = adt.serialize(root)
     open(args.output, 'wb').write(blob)
     if args.dump:
