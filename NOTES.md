@@ -11,6 +11,18 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 post-AMFI hang is likely inside `sweet_hfs_register()`.** The
+  AMFI log is followed immediately by `sweet_hfs_register()` in
+  `bsd_init.c:707`; the screen did not show its final
+  `SWEET HFS: hfs-627.100.6 registered` line. **Patch 0089** adds printf
+  markers at entry, converterinit, vfs_fsadd, zones and sysctl inside
+  `bsd/sweet_hfs/sweet_hfs_iokit.c`. The local CI-flag syntax check cannot
+  resolve `hfs.h` (the HFS source is staged by the CI patch scripts with its
+  own include path), so the CI build is the compile gate; the edits are
+  printf-only. **Patch 0088** enables the `bsd_init` stage markers too.
+  Both are committed to the `pocopad-dizi` branch; CI run 4 will combine
+  them.
+
 - **2026-10-20 XNU reaches AMFI registration on dizi (screen evidence).** The
   latest NOP-CNTP 0085 boot shows kernel init, VM, scheduler/IPC, thread and
   crypto providers, ending with:

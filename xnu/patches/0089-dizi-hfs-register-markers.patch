@@ -1,0 +1,39 @@
+diff --git a/bsd/sweet_hfs/sweet_hfs_iokit.c b/bsd/sweet_hfs/sweet_hfs_iokit.c
+--- a/bsd/sweet_hfs/sweet_hfs_iokit.c
++++ b/bsd/sweet_hfs/sweet_hfs_iokit.c
+@@ -44,6 +44,7 @@
+ void
+ sweet_hfs_register(void)
+ {
++	printf("SWEET HFS: register entry\n");
+ #ifndef panic_on_assert
+ 	panic_on_assert = PE_i_can_has_kernel_configuration() & kPEICanHasAssertions;
+ #endif
+@@ -53,7 +54,9 @@
+ #endif
+ 
+ 	/* The HFSEncodings kext's start(): its converters must exist before any mount. */
++	printf("SWEET HFS: converterinit\n");
+ 	hfs_converterinit();
++	printf("SWEET HFS: converters ready\n");
+ 
+ 	struct vnodeopv_desc *op_descs[] = {
+ 		&hfs_vnodeop_opv_desc,
+@@ -78,13 +81,17 @@
+ 		    | VFS_TBLNATIVEXATTR)
+ 	};
+ 
++	printf("SWEET HFS: fsadd\n");
+ 	int ret = vfs_fsadd(&vfe, &sweet_hfs_vfs_handle);
+ 	if (ret) {
+ 		panic("SWEET HFS: vfs_fsadd failed: %d", ret);
+ 	}
++	printf("SWEET HFS: fsadd ok\n");
+ 
+ 	hfs_init_zones();
++	printf("SWEET HFS: zones ready\n");
+ 	hfs_sysctl_register();
++	printf("SWEET HFS: sysctl ready\n");
+ 
+ 	uint32_t num_cpus;
+ 	size_t sz = sizeof(num_cpus);
