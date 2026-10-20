@@ -13,6 +13,16 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- `tools/sweet-crash.py --symbols-only CACHE ROOT REPORT` now implements
+  the working per-image resolver without ipsw's failing all-cache ObjC
+  pass. Also separates concatenated SMP/CRASH lines and caches repeated
+  addresses. Reports explicitly label nearest symbols and offsets, so an
+  unnamed MobileGestalt function is not misidentified as MGSetAnswer.
+  Verified against both real gui and lsd captures with different ASLR
+  slides, expected journal-recovery/database-seeding frames and split
+  thread lines. Legacy invocation/default a2s path retained. Repository
+  validator and diff whitespace pass. Read-only test mount unmounted.
+
 - **0098 full build running**: commit `7c82a2e`, Actions run
   **39445471430**, https://github.com/omame1203/ios-sweet/actions/runs/39445471430 .
   Do not start a duplicate or cancel for an observation timeout. On success
