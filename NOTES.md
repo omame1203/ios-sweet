@@ -47,6 +47,16 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   `tools/sweet-usbnet.sh` before `fastboot boot`. `bsd_init.c` passes the
   saved CI-flag syntax check; the patch applies on the pre-edit file. Not
   CI-built or hardware-booted yet.
+- **First kernel trial will omit the RAM disk.** Build the payload with
+  `mkpayload.py KERNEL ADT payload.bin --cmdline 'debug=0xc cpus=1
+  keepsyms=1 -enable_kprintf_spam -noprogress rd=md0 wdt=-1
+  wdt_test=no_user_checkin sweetearlyusb=1 sweetusb=2 diziusb=1
+  sweetkeys=0 sweettouch=0 sweetlog=0 ufsrw=0'` and no `--ramdisk`. The
+  early USB probe runs before `vfs_mountroot`; the md0 root mount then
+  fails and panics, which is expected. Keep the 16 MiB HFS image for the
+  second trial. Host capture:
+  `tools/dizi-kernel-usb-diag.sh shim/out/dizi/shim-boot.img
+  logs/kernel-early.txt 120`.
 
 - **2026-10-20 USB diagnostics now work on the dizi temporary boot.** A
   `fastboot boot` image exposes a vendor EP0 device (1209:0001) that streams
