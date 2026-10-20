@@ -183,3 +183,6 @@ to the CPU count without latency measurements.
 - Wi-Fi/Bluetooth, GPU, ADSP audio, cameras, sensors, pen, suspend/resume and secure-world compatibility remain outstanding; source/runtime implementation and provenance needed.
 
 - **0112/0113 macOS link verified:** Actions `39472174737` succeeded, 17,283,968-byte ARM64 Mach-O kernel hash `be1e5f73200fd6136e0503ffb4a92673561b45adbdbb1206372649d1f8c8b422`; no real hardware behavior proven.
+
+- **0114 source implementation:** guarded, read-only partial SMMUv2 GR0 audit in XNU (ID0/ID1/sCR0/SMR0 only), proven register addresses from past probes. No ID2/S2CR mapping, hypervisor stream ownership, CB allocation, GPI DMA enable or bus write; 54 simulated assertions + native ARM64 objects only.
+- **0115 native IONetworkingFamily blocker:** true IONetworkInterface unconditionally allocates a second BSD ifnet, while fake IONetworkController class collides at link; only a standalone fail-closed future migration planner passes host tests, not native functional integration.

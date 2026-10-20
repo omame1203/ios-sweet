@@ -1,0 +1,248 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -112,6 +112,8 @@
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
+ bsd/dev/dizi_smmu_dma.c		standard
++bsd/dev/smmu_owner_0114.c		standard
++bsd/dev/smmu_owner_0114_ro_xnu.c	standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -55,6 +55,7 @@
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
++extern void dizi_smmu_owner_0114_boot_audit(void);
+ 
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -821,6 +822,8 @@
+ 	sweet_keys_init();
+ 	sweet_touch_init();
+ 	sweet_usb_probe();
++	/* Default no-op; explicit dizihw=1 + dizismmuownerro=1 only. */
++	dizi_smmu_owner_0114_boot_audit();
+ 	return 0;
+ }
+ 
+diff --git a/bsd/dev/smmu_owner_0114.h b/bsd/dev/smmu_owner_0114.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/smmu_owner_0114.h
+@@ -0,0 +1,52 @@
++/* SPDX-License-Identifier: BSD-2-Clause
++ * Dizi apps-SMMUv2 READ-ONLY ownership evidence contract.
++ * Pure value analysis. No hardware operations, allocator, DMA or MMIO.
++ * All *_known fields start false; no register value infers ownership.
++ */
++#ifndef DIZI_SMMU_OWNER_0114_H
++#define DIZI_SMMU_OWNER_0114_H
++#include <stdbool.h>
++#include <stdint.h>
++
++#define DZ_0114_SMRS 120u /* FDT num-smr-override; ID0 reports 126 physical */
++#define DZ_0114_CBS 77u
++#define DZ_0114_GPI_SID 0x416u
++#define DZ_0114_QUP_SID 0x403u
++#define DZ_0114_ID0 0x4c017e7eu
++#define DZ_0114_ID1 0x6000004du
++#define DZ_0114_SCR0 0x00270406u /* measured in probe13; not an ownership grant */
++#define DZ_0114_SMR0 0x80000060u /* measured probe12; one of 120 slots */
++
++enum dz_0114_result {
++    DZ_0114_UNKNOWN = 0,      /* partial, unread, altered, ID2 unproven */
++    DZ_0114_CONFLICT,         /* SID match / invalid translation / CB use */
++    DZ_0114_READ_ONLY_CLEAR,  /* NO matching valid SMRs in coherent snapshot */
++    DZ_0114_PLAN_ONLY        /* out-of-band proof; STILL NO DMA activation */
++};
++struct dz_0114_snapshot {
++    uint32_t id0, id1, id2, scr0;
++    bool id0_known, id1_known, id2_known, scr0_known;
++    uint32_t smr[DZ_0114_SMRS], s2cr[DZ_0114_SMRS];
++    bool smr_known[DZ_0114_SMRS], s2cr_known[DZ_0114_SMRS];
++};
++struct dz_0114_report {
++    enum dz_0114_result result;
++    unsigned observed_smrs, valid_smrs, observed_s2crs;
++    unsigned gpi_matches, qup_matches;
++    bool id2_stage1_ok, snapshot_complete;
++};
++/* Authority CANNOT be inferred from SMR.VALID=0, a CB read or FDT SIDs.
++ * The current kernel has NO producer for any of these attestations. */
++struct dz_0114_authority {
++    bool hypervisor_exclusive, gpi_stream_exclusive, qup_stream_exclusive;
++    bool snapshot_stable_and_fenced; /* independent owner assures no SMR/CB races */
++    bool smr_slots_exclusive, context_banks_exclusive;
++    bool page_tables_synced, tlb_and_fault_path_ready;
++    bool pinmux_clocks_irqs_owned, memory_and_cache_coherency_proven;
++    unsigned smr_gpi, smr_qup, cb_gpi, cb_qup;
++};
++struct dz_0114_report dz_0114_evaluate(const struct dz_0114_snapshot *s);
++/* Successful result is just permission to DESIGN a route, never a command. */
++enum dz_0114_result dz_0114_plan_contract(const struct dz_0114_snapshot *s,
++    const struct dz_0114_authority *proof);
++#endif
+diff --git a/bsd/dev/smmu_owner_0114.c b/bsd/dev/smmu_owner_0114.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/smmu_owner_0114.c
+@@ -0,0 +1,90 @@
++/* SPDX-License-Identifier: BSD-2-Clause
++ * No MMIO, no use of 0102's proposed route values, and no device writes.
++ */
++#include "smmu_owner_0114.h"
++
++static bool smr_match(uint32_t smr, uint16_t sid)
++{
++    if (!(smr & 0x80000000u)) return false;
++    uint32_t id = smr & 0xffffu;
++    uint32_t mask = (smr >> 16) & 0x7fffu; /* bit31 is VALID, never MASK */
++    return ((id ^ sid) & (~mask & 0xffffu)) == 0;
++}
++static bool id2_supported(uint32_t id2)
++{
++    /* ARM SMMUv2 ID2.PTFS_4K[12], IAS[3:0], OAS[7:4].
++     * 0x1022 in 0102 tests is SYNTHETIC, not a dizi measurement. */
++    unsigned ias = id2 & 15u, oas = (id2 >> 4) & 15u;
++    return (id2 & (1u << 12)) != 0 && ias >= 2 && ias <= 5 &&
++        oas >= 2 && oas <= 5;
++}
++struct dz_0114_report dz_0114_evaluate(const struct dz_0114_snapshot *s)
++{
++    struct dz_0114_report r = {0};
++    if (!s) return r;
++    if (!s->id0_known || !s->id1_known || !s->scr0_known ||
++        s->id0 != DZ_0114_ID0 || s->id1 != DZ_0114_ID1 ||
++        (s->scr0 & ((1u << 0) | (1u << 3))) ||
++        !(s->scr0 & (1u << 10))) return r;
++    /* sCR0 differs across boot stages: do not treat the prior measured
++     * value as static ownership permission; only check feature bits. */
++    r.id2_stage1_ok = s->id2_known && id2_supported(s->id2);
++    bool fully_observed = r.id2_stage1_ok;
++    bool bad_route = false;
++    for (unsigned i = 0; i < DZ_0114_SMRS; i++) {
++        if (!s->smr_known[i]) { fully_observed = false; continue; }
++        r.observed_smrs++;
++        if (!(s->smr[i] & (1u << 31))) continue;
++        r.valid_smrs++;
++        if (smr_match(s->smr[i], DZ_0114_GPI_SID)) r.gpi_matches++;
++        if (smr_match(s->smr[i], DZ_0114_QUP_SID)) r.qup_matches++;
++        if (!s->s2cr_known[i]) { fully_observed = false; continue; }
++        r.observed_s2crs++;
++        unsigned type = (s->s2cr[i] >> 16) & 3u;
++        unsigned cb = s->s2cr[i] & 255u;
++        if (type == 3u || (type == 0u && cb >= DZ_0114_CBS)) bad_route = true;
++    }
++    if (r.gpi_matches || r.qup_matches || bad_route) {
++        r.result = DZ_0114_CONFLICT;
++        return r;
++    }
++    r.snapshot_complete = fully_observed;
++    if (fully_observed) r.result = DZ_0114_READ_ONLY_CLEAR;
++    return r;
++}
++
++enum dz_0114_result dz_0114_plan_contract(const struct dz_0114_snapshot *s,
++    const struct dz_0114_authority *p)
++{
++    struct dz_0114_report r = dz_0114_evaluate(s);
++    if (r.result != DZ_0114_READ_ONLY_CLEAR) return r.result;
++    if (!p) return DZ_0114_UNKNOWN; /* no owner attestation */
++    if (!p->snapshot_stable_and_fenced ||
++        !p->hypervisor_exclusive || !p->gpi_stream_exclusive ||
++        !p->qup_stream_exclusive || !p->smr_slots_exclusive ||
++        !p->context_banks_exclusive || !p->page_tables_synced ||
++        !p->tlb_and_fault_path_ready || !p->pinmux_clocks_irqs_owned ||
++        !p->memory_and_cache_coherency_proven ||
++        p->smr_gpi >= DZ_0114_SMRS || p->smr_qup >= DZ_0114_SMRS ||
++        p->smr_gpi == p->smr_qup || p->cb_gpi >= DZ_0114_CBS ||
++        p->cb_qup >= DZ_0114_CBS || p->cb_gpi == p->cb_qup)
++        return DZ_0114_UNKNOWN;
++    /* Require both candidate slots' S2CR explicitly observed as FAULT
++     * and UNUSED SMR, and all live translation CB indices inspected. */
++    if (!s->s2cr_known[p->smr_gpi] || !s->s2cr_known[p->smr_qup] ||
++        (s->smr[p->smr_gpi] & (1u << 31)) ||
++        (s->smr[p->smr_qup] & (1u << 31)) ||
++        ((s->s2cr[p->smr_gpi] >> 16) & 3u) != 2u ||
++        ((s->s2cr[p->smr_qup] >> 16) & 3u) != 2u)
++        return DZ_0114_UNKNOWN;
++    for (unsigned i = 0; i < DZ_0114_SMRS; i++) {
++        if (!(s->smr[i] & (1u << 31))) continue;
++        unsigned type = (s->s2cr[i] >> 16) & 3u;
++        unsigned cb = s->s2cr[i] & 255u;
++        if (type == 0u && (cb == p->cb_gpi || cb == p->cb_qup))
++            return DZ_0114_CONFLICT;
++    }
++    /* This value authorizes a SOFTWARE PLAN ONLY. It does not activate a
++     * context bank, install any PTE, allow DMA, TLBI or write an SMMU reg. */
++    return DZ_0114_PLAN_ONLY;
++}
+diff --git a/bsd/dev/smmu_owner_0114_ro_xnu.c b/bsd/dev/smmu_owner_0114_ro_xnu.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/smmu_owner_0114_ro_xnu.c
+@@ -0,0 +1,59 @@
++/* SPDX-License-Identifier: BSD-2-Clause
++ * Opt-in, READ-ONLY SMMUv2 ownership observation.
++ * Only PA/offsets already individually proven in saved dizi shim logs:
++ *  ID0 @15000020, ID1 @15000024, sCR0 @15000000, SMR0 @15000800.
++ * ID2 @15000028, S2CR and SMR1..119 are deliberately NOT read: no
++ * successful per-register device evidence. So all route grants are UNKNOWN.
++ * This must NOT be taken as a translation/CB/hypervisor authorization.
++ * No SMMU/GPI/QUP register writes, TLB commands or DMA.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <vm/vm_kern.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++#include "smmu_owner_0114.h"
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++#define DZ_0114_GR0_PA UINT64_C(0x15000000)
++#define DZ_0114_GR0_LENGTH 4096u
++
++static uint32_t
++dz_0114_read32(vm_offset_t va, uint32_t off)
++{
++    uint32_t v;
++    vm_offset_t addr = va + off;
++    __asm__ volatile("ldr %w0, [%1]" : "=r"(v) : "r"(addr) : "memory");
++    __asm__ volatile("dmb oshld" ::: "memory");
++    return v;
++}
++
++void
++dizi_smmu_owner_0114_boot_audit(void)
++{
++    uint32_t dizi = 0, observe = 0;
++    (void)PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
++    (void)PE_parse_boot_argn("dizismmuownerro", &observe, sizeof(observe));
++    if (dizi != 1 || observe != 1) return;
++    vm_offset_t base = ml_io_map((vm_offset_t)DZ_0114_GR0_PA,
++        DZ_0114_GR0_LENGTH);
++    if (!base) {
++        printf("DIZI SMMU 0114: read-only GR0 map unavailable; blocked\n");
++        return;
++    }
++    struct dz_0114_snapshot s = {0};
++    s.id0 = dz_0114_read32(base, 0x20u);
++    s.id1 = dz_0114_read32(base, 0x24u);
++    s.scr0 = dz_0114_read32(base, 0x00u);
++    s.smr[0] = dz_0114_read32(base, 0x800u);
++    s.id0_known = s.id1_known = s.scr0_known = s.smr_known[0] = true;
++    /* ID2 and every S2CR deliberately UNKNOWN. No real owner attestation.
++     * No path from this audit to dz_plan_routes or any hardware activation. */
++    struct dz_0114_report r = dz_0114_evaluate(&s);
++    printf("DIZI SMMU 0114 RO: ID0=0x%x ID1=0x%x sCR0=0x%x SMR0=0x%x\n",
++        s.id0, s.id1, s.scr0, s.smr[0]);
++    printf("DIZI SMMU 0114 RO: status=%u observed=%u/%u ID2/S2CR=UNREAD, owner=UNPROVEN, DMA=BLOCKED\n",
++        (unsigned)r.result, r.observed_smrs, DZ_0114_SMRS);
++}
++#endif
