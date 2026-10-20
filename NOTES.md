@@ -11,6 +11,27 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 first XNU hardware boot attempt (0084, read-only UFS plan)
+  did not reach USB.** `fastboot boot` of the 16,432 KB image returned
+  Sending OKAY (0.379s) / Booting OKAY (0.344s). The host then saw the
+  bootloader's 18d1:d00d device disappear at 19:51:13 and no 1209:0001 or
+  ECM interface followed; `sweet-usbnet.sh` captured no UDP data. After
+  ~2 minutes the tablet answered neither adb nor fastboot, so it is hung.
+  `ufsrw=0 rootrw=0` was used; no partition write was requested. The screen
+  has not been observed yet; treat the failure point as unknown until then.
+  This is a boot observation, not an XNU success.
+- 0085 (early USB hook) CI run 39410103649 succeeded (`headSha 1caa4a7`);
+  kernel SHA-256
+  `10697435167f8e92b673f093914e49d800a6cf42a0deb7ded7326d382653c3d2`,
+  downloaded to `xnu/out-0085/`. A no-radisk md0 image is built at
+  `shim/out/dizi/shim-boot.img` (16,826,368 bytes, SHA-256
+  `a4a976aaf35997e9133cf630d57d86b59800a576e35617cc1069aa86eb209f56`),
+  with the payload verified inside the boot image. Waiting for a device
+  reset (Power + Volume Down) before the next temporary boot.
+- The UFS test used the 0084 kernel, whose USB probe only runs from
+  `sweet_ufs_init()`; the 0085 md0 test will start USB before the root mount
+  and should show whether the failure is earlier than `bsd_init`.
+
 - **2026-10-20 complete XNU link achieved in CI.** Run 39409584712
   (`main` = `bcf5194`, 0084) finished successfully. Artifact `xnu-kernel`
   contains `kernel.development.sweet` (17 MB, Mach-O 64-bit arm64, PIE),
