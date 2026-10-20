@@ -11,6 +11,23 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 USB panic root cause: the IO submap overlaps the dizi
+  kernel image.** The 0091 hardware boot reached `SWEET USB: ue0 up` then
+  panicked with the same pc/lr (`0xfffffff007bd7fdd`/`0xfffffff007bd7fd4`,
+  unaligned data abort). The panic printed `ud.dma` =
+  `0xfffffff007b00000`. The kernel's `__TEXT_EXEC` is
+  `0xfffffff0072e4000`..`0xfffffff007b38000` and the linked image ends at
+  `0xfffffff0084c4c68`, so `io_map_init()`'s `kmem_suballoc(kernel_map,
+  ...)` placed the IO submap inside kernel code. DMA zero/copy writes
+  corrupted the kernel; 0091 (32-bit zero) and 0092 (aligned copies) do
+  not change the destination.
+- **Patch 0093** pins `io_range.min_address`/`max_address` in
+  `osfmk/arm/io_map.c` to `0xfffffff008500000` + 8 MiB before the
+  suballoc, above the linked image. 0092 is kept for the Device-mapped
+  DMA copies. CI run 39417412938 builds both; hardware result pending.
+  The iPadOS root is already in `userdata`; after the IO map fix the
+  UFS boot must reach `/sbin/launchd` and be verified over the screen/USB.
+
 - **2026-10-20 iPadOS root flash in flight (user approved userdata
   overwrite).** The host-verified iPadOS 16.7.16 root sha256
   `3151ac6b683b3b1cea1f1adbc8938141c64e660592fb4e25c89774821cf4bf07`
