@@ -2,8 +2,9 @@
 """Temporarily boot the dizi shim and collect its diagnostics over USB.
 
 Runs the EP0 logger before `fastboot boot`, then (after the shim resets to
-Android) also saves the ramoops/pstore console as a fallback. Nothing is
-flashed: boot, vendor_boot and every other partition stay untouched.
+Android, if installed) also saves the ramoops/pstore console as a fallback.
+Use --no-android with a native iPadOS root: the tablet will not return to
+Android, so USB is the only capture channel. No partitions are flashed.
 """
 import argparse
 import os
@@ -54,7 +55,11 @@ def main():
     ap.add_argument('--usb-wait', type=float, default=130)
     ap.add_argument('--no-boot', action='store_true',
                     help='skip reboot/fastboot boot and only collect pstore')
+    ap.add_argument('--no-android', action='store_true',
+                    help='collect via USB only; skip Android return and pstore')
     args = ap.parse_args()
+    if args.no_android and args.no_boot:
+        ap.error('--no-android cannot be combined with --no-boot')
     if not args.image.exists():
         raise SystemExit(f'Missing boot image: {args.image}')
     if not args.out.parent.exists():
@@ -99,7 +104,17 @@ def main():
             args.out.write_bytes(usb_log.read_bytes())
             print(f'USB diagnostics saved to {args.out}', flush=True)
         else:
-            print('USB log capture failed; relying on pstore', file=sys.stderr)
+            print('USB log capture failed' +
+                  ('; Android pstore fallback disabled' if args.no_android
+                   else '; relying on pstore'), file=sys.stderr)
+
+    if args.no_android:
+        if not usb_ok:
+            print('No USB log captured; Android pstore fallback disabled.',
+                  file=sys.stderr)
+            return 4
+        print('USB capture complete; Android return check skipped.', flush=True)
+        return 0
 
     if args.no_boot and not adb_devices():
         raise SystemExit('No adb device for the pstore fallback')
