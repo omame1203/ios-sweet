@@ -11,6 +11,23 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 complete XNU link achieved in CI.** Run 39409584712
+  (`main` = `bcf5194`, 0084) finished successfully. Artifact `xnu-kernel`
+  contains `kernel.development.sweet` (17 MB, Mach-O 64-bit arm64, PIE),
+  SHA-256 `f2a60a17fbf19fc20e60930f365476b4a755bd846b79f04d9601275090ef6777`,
+  downloaded to `xnu/out-0084/`. This is a CI link result, not a boot result.
+  `mkpayload.py` produced `payload-test-0084.bin` (16,613,456 bytes; no
+  ramdisk) and `BOARD=dizi shim/build.sh <abs payload>` produced
+  `shim/out/dizi/shim-boot.img` (16,826,368 bytes, SHA-256
+  `4149163f40d56c7d94b6d4af779c23ab64d69923e042541eca2b9e99c7758aad`).
+  The verified USB diagnostic image was preserved as
+  `shim/out/dizi/shim-boot-diag-usb-verified.img` (SHA-256 `8f662931...`).
+- Run 39410103649 (`pocopad-dizi`, 0085 early USB) is still building. Patch
+  0086 (kernel EP0 0x52/0x51/0x53 log + dizi product string) is prepared,
+  compiles as a Mach-O object and applies cleanly on top of 0084, but is
+  not in any CI build yet. Do not dispatch another run on the same ref until
+  39410103649 finishes: the workflow concurrency group would cancel it.
+
 - **2026-10-20 CI kernel build dispatched (in progress).** GitHub login is
   `omame1203`; `dipa-studio/ios-sweet` is read-only, so the branch was pushed
   to the new public fork `omame1203/ios-sweet` and its `main` was

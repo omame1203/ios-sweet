@@ -1,0 +1,98 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -730,6 +730,14 @@
+ 	return os_atomic_load(&sweet_log_total, relaxed);
+ }
+ 
++/* Oldest byte still readable in the 4 MiB RAM ring (for the USB EP0 log). */
++uint64_t
++sweet_log_oldest(void)
++{
++	uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
++	return total > SWEET_LOG_SIZE ? total - SWEET_LOG_SIZE : 0;
++}
++
+ struct sweet_log_header {
+ 	char magic[8];
+ 	uint32_t version, size;
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -39,6 +39,7 @@
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
++static bool sweet_usb_dizi;
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ 
+@@ -100,6 +101,7 @@
+ 	 * are shared with sweet. */
+ 	PE_parse_boot_argn("sweetusb", &enabled, sizeof(enabled));
+ 	PE_parse_boot_argn("diziusb", &dizi, sizeof(dizi));
++	sweet_usb_dizi = dizi != 0;
+ 	if (!enabled) {
+ 		return;
+ 	}
+@@ -244,6 +246,11 @@
+ 
+ #define UD_TXQ          32
+ 
++/* Console ring in sweet_ufs.c; also exported over EP0 for headless bring-up. */
++extern uint32_t sweet_log_copy(uint64_t *pos, char *out, uint32_t max);
++extern uint64_t sweet_log_position(void);
++extern uint64_t sweet_log_oldest(void);
++
+ static struct {
+ 	vm_offset_t dwc;
+ 	vm_offset_t dma;
+@@ -391,7 +398,7 @@
+ 	if (idx >= sizeof(ud_strings) / sizeof(ud_strings[0])) {
+ 		return 0;
+ 	}
+-	const char *str = ud_strings[idx];
++	const char *str = (idx == 2 && sweet_usb_dizi) ? "Dizi boot diagnostics" : ud_strings[idx];
+ 	uint32_t n = 2;
+ 	for (; *str && n < 126; str++) {
+ 		out[n++] = (uint8_t)*str;
+@@ -456,7 +463,30 @@
+ 
+ 	printf("SWEET USB: setup %02x %02x %04x %04x len %u\n", type, req, value, index, length);
+ 	ud.data_in = (type & 0x80) != 0;
+-	if ((type & 0x60) == 0x20) {    /* class request (e.g. SET_ETHERNET_PACKET_FILTER) */
++	/* Do not print the EP0 diagnostic reads themselves: that would feed the
++	 * console ring the host is draining and never let it settle. */
++	if (!(type == 0xc0 && (req == 0x51 || req == 0x52)) &&
++	    !(type == 0x00 && req == 0x53)) {
++		printf("SWEET USB: setup %02x %02x %04x %04x len %u\n", type, req, value, index, length);
++	}
++	if (type == 0xc0 && req == 0x52 && value == 0 && index == 0 && length >= 12) {
++		/* Same live-ring protocol as the temporary dizi shim. */
++		uint32_t words[4] = { 0x474c4f50u, (uint32_t)sweet_log_position(),
++		    (uint32_t)sweet_log_oldest(), 0 };
++		n = length < 16 ? length : 16;
++		memcpy(data, words, n);
++	} else if (type == 0xc0 && req == 0x51 && length > 0) {
++		uint64_t total = sweet_log_position(), oldest = sweet_log_oldest();
++		uint64_t pos = value | ((uint64_t)index << 16);
++		if (pos < oldest || pos >= total) {
++			ok = false;
++		} else {
++			n = sweet_log_copy(&pos, (char *)data, length < 63 ? length : 63);
++			ok = n != 0;
++		}
++	} else if (type == 0x00 && req == 0x53 && value == 0 && index == 0 && length == 0) {
++		/* Host finished reading; keep the gadget and console running. */
++	} else if ((type & 0x60) == 0x20) {    /* class request (e.g. SET_ETHERNET_PACKET_FILTER) */
+ 		ok = (length == 0);
+ 	} else if ((type & 0x60) != 0) {
+ 		ok = false;
+@@ -835,6 +865,7 @@
+  */
+ extern uint32_t sweet_log_copy(uint64_t *pos, char *out, uint32_t max);
+ extern uint64_t sweet_log_position(void);
++extern uint64_t sweet_log_oldest(void);
+ 
+ static void
+ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
