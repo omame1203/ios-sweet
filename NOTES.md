@@ -30,6 +30,15 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   `fastboot boot`. This writes no partition and no userdata. Expect the
   early framebuffer console only: the XNU USB probe is called from
   `sweet_ufs.c`, so a `rd=md0` boot does not start kernel USB.
+- Second, read-only kernel-USB trial after the RAM-disk one:
+  `rd=ufsroot0 ufsrw=0 rootrw=0 sweetlog=0 sweetkeys=0 sweettouch=0
+  sweetusb=2 diziusb=1`. `sweet_ufs_rootdev()` runs `sweet_ufs_init()`
+  (read-only because `ufsrw=0`) and only then `sweet_usb_probe()`, so the
+  ECM interface and live UDP console can come up before the root HFS mount
+  fails on Android's userdata. No partition is written; the UFS host is
+  reinitialized by Android after the test. Host side:
+  `tools/sweet-usbnet.sh logs/kernel-usb.txt`. If UFS errors before the USB
+  probe, fall back to the `rd=md0` screen console.
 
 - **2026-10-20 USB diagnostics now work on the dizi temporary boot.** A
   `fastboot boot` image exposes a vendor EP0 device (1209:0001) that streams
