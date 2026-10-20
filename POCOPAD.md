@@ -25,7 +25,8 @@ Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
 - UFSの読み取り失敗は、デバイスが準備されていない状態（sense `02/04/02`）と実測。
   診断shimでSTART STOP UNITによりACTIVEへ切り替えると、GPT・userdata・HFSX署名を読み取れました。
   パッチ0097を組み込んだXNUでも、ユーザーの実機ログで `iOSRoot` のHFSマウントとlaunchd実行試行を確認。
-  現在はlaunchdの `CS_KILLED` を調査中です。ユーザー空間の正常動作は未確認。
+  launchdの終了理由は `EXEC/WRONG_PLATFORM` と特定。参照実装の起動引数を加えて再試験中です。
+  ユーザー空間の正常動作は未確認。
 - 19領域のバックアップを端末側SHA-256と照合。
 - 診断shimの実機画面を確認。GIC優先度設定時の例外は、アドレス自動更新なしのMMIO命令で通過。
   仮想タイマー終了時の `CNTP_CTL_EL0` 例外も、使用していない物理タイマーへのアクセスを除いて解消しました。
@@ -54,6 +55,9 @@ python3 tools/pocopad-probe.py --backup
 python3 tools/check-dizi-board.py backup/dizi/fdt
 BOARD=dizi bash shim/build.sh
 python3 tools/mkadt.py shim/out/dizi/dizi-ipad5.adt --board dizi
+# 実際のiPadOSルートを使うペイロード（起動引数をボード設定から取得）:
+python3 tools/mkpayload.py xnu/out-0097/kernel.development.sweet \
+  shim/out/dizi/dizi-ipad5.adt shim/out/dizi/payload-ipados.bin --board dizi
 python3 tools/validate-repo.py
 python3 tools/dizi-diag.py --out logs/dizi-diag.txt   # Android復帰を利用するため、Android使用時のみ
 ```

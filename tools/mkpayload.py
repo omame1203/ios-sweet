@@ -26,7 +26,7 @@ ADT and boot_args, inside topOfKernelData (never handed to the VM), and the
 ADT gets /chosen/memory-map "RAMDisk" = <phys, size> for IOFindBSDRoot to
 turn into md0 (boot with rd=md0).
 """
-import argparse, os, struct, sys
+import argparse, json, os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
@@ -196,10 +196,19 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('kernel'); ap.add_argument('adt'); ap.add_argument('out')
-    ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1')
+    ap.add_argument('--board', choices=['dizi'], help='Use the board native-iPadOS boot arguments unless --cmdline overrides them')
+    ap.add_argument('--cmdline')
     ap.add_argument('--ramdisk', help='root image for md0 (boot with rd=md0)')
     a = ap.parse_args()
-    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk)
+    cmdline = a.cmdline
+    if cmdline is None:
+        if a.board:
+            path = os.path.join(os.path.dirname(__file__), '..', 'boards', a.board + '.json')
+            with open(path) as profile:
+                cmdline = json.load(profile)['ipados_cmdline']
+        else:
+            cmdline = 'debug=0xc serial=3 cpus=1 keepsyms=1'
+    blob, info = build(a.kernel, a.adt, cmdline, a.ramdisk)
     open(a.out, 'wb').write(blob)
     for k, v in info.items():
         if k != 'segs':

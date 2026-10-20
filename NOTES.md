@@ -11,6 +11,34 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **launchd exit cause now identified exactly**: user supplied the full
+  cs-debug panic: `namespace 9 code 0xe description none`. In this XNU's
+  `bsd/sys/reason.h`, namespace 9 = OS_REASON_EXEC and 14 =
+  EXEC_EXIT_REASON_WRONG_PLATFORM. `kern_exec.c:7391..7428` rejects iOS
+  platform binaries on this macOS-config kernel unless the DEVELOPMENT
+  `unentitled_ios_sim_launch` tunable is set (or a special entitlement/spawn
+  attr is present). This is the SAME bootstrap requirement documented in
+  upstream README.md:110 and historical NOTES below. Earlier dizi cmdlines
+  accidentally omitted it. CS_KILLED alone was not a page-hash diagnosis.
+  User log confirms launchd and dyld embedded signatures loaded, then this
+  wrong-platform exit. Host binary hashes had already passed (above).
+- **Userland boot arguments corrected and trial issued**: native 0097
+  kernel unchanged; added reference `unentitled_ios_sim_launch=1
+  ignition_level=1 launchd_unsecure_cache=1`, retained `dizihw=1`, real UFS
+  root RW, USB/input disabled and 1-second persistent console. cs_debug=1.
+  `boards/dizi.json` now has `ipados_cmdline`; `mkpayload.py --board dizi`
+  selects it unless explicit --cmdline overrides it. Legacy default and
+  explicit cmdline behavior retained; explicit override was byte-compared
+  against the earlier complete payload. Embedded boot payload also verified.
+  Image `shim/out/dizi/shim-boot-ipados0097-platform.img`, SHA-256
+  `36a85b756852fa9004e8721751da1decbd55d5f1ccd89bfc0816aad3b5171c67`.
+  Fastboot send/boot accepted 0.379s/0.346s. Awaiting screen observation of
+  `exec launchd`, next userland logs, GUI or next failure. Still no claim
+  of normal userland/GUI success. User transcription's userdata LBA
+  `0x35e228` differs from shim-measured `0x35a228`; could be a transcription
+  error. Use live GPT, never either transcription as a hardcoded write LBA.
+
+
 - **0097 native UFS/HFS root success, launchd still killed** (user screen
   transcription). User reports `dizi device ACTIVE ready (0)`, `"userdata"
   on LUN 0`, `hfs: mounted iOSRoot on device b(1,0)`, BSD post-init done,
