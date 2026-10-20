@@ -12,18 +12,82 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 ### Latest checkpoint
 
 - Initial port implementation commit: `c4d8f06` on branch `pocopad-dizi`.
-- Latest diagnostic SHA-256 (not hardware-booted):
-  `d2f562b9d55660ae18e1768c3924f92396d83795e6f4b131103a3358f6fd2b36`.
-- GitHub CLI device authorization was started with `GH_BROWSER=true gh auth
-  login --hostname github.com --git-protocol https --web --skip-ssh-key`.
-  Git credential-helper setup was declined; the browser was not auto-opened.
-  **Live auth exec session 37852** is polling for user authorization. The
-  one-time code was shown to the user; do not store auth codes/tokens here.
-  Poll that handle or `gh auth status` before starting another login.
-- Android sys.boot_completed=1 at the final check. Working image mounts were
-  all unmounted. Root image and final fsck/hash are complete as detailed below.
-- Full XNU build, native iPadOS boot and hardware diagnostic observation
-  remain unverified; the user goal is still active and incomplete.
+- Diagnostic boot 02 SHA-256:
+  `9db98a27282291ee3604af7203ce80a606d1d8b615d94074f6be97585a2aa9ab`.
+  User observed `STAGE gic config`, ESR `0x96000010`, ELR `0xa8001e20`,
+  FAR/X1 `0x17270400`, LR `0xa8001ce4`. Matching ELF confirms the first
+  priority byte store `strb w3,[x1],#1` at offset 0x1e20.
+- Diagnostic boot 03 SHA-256:
+  `8b7a8c99af4d1e71718521771d1f1c1fb5d454cfed3d7b04d403495f6ab29674`.
+  Changed priority initialization to aligned word stores (matching XNU).
+  Fastboot sending/booting OKAY (0.007s/0.345s). User observed `STAGE gic
+  priority words`, ESR `0x96000010`, ELR `0xa8001e2c`, FAR `0x17270400`.
+  Matching ELF confirms first `str w1,[x0],#4` at offset 0x1e2c.
+  BOTH widths abort at the same priority address. The word-store trial did
+  NOT fix the failure. Do not infer a byte-access erratum from boot 02.
+  These screens prove native shim/console execution; not XNU/iPadOS boot.
+  Copies of both matching Images/ELFs/boot images are in private
+  `backup/dizi/diag-0{2,3}-gic-{byte,word}-abort/`.
+- **Latest hardware observation: diagnostic boot 04**, SHA-256:
+  `62a131df3110ebccbf28c41b1e2c75d0c469060d256323fad7c4d077f9c29039`.
+  MMIO helpers now force single-register, non-writeback LDR/STR; disassembly
+  confirms priority initialization is `str w0,[x1]` then separate `add`.
+  Android root readback confirms `/sys/hypervisor/type` = `gunyah`, version
+  entries 1 and 81. Post-indexed MMIO under a hypervisor was the new
+  hypothesis, based on both earlier failing instructions and the Linux ARM
+  discussion: https://lists.infradead.org/pipermail/linux-arm-kernel/2024-October/966098.html .
+  Do not claim this diagnoses all Gunyah behavior or a hardware erratum.
+  User observed the following NEW panic (verbatim values):
+
+  ```text
+  STAGE  gic vtimer
+  ESR    0x02000000
+  ELR    0xA8001ABC
+  FAR    0x00000000
+  SPSR   0x600003C5
+  GICR   0x17260000
+  R TYPER 0x00000000
+  GICD ctlr=000000D0
+       typer=0149001F
+  GIC  iidr=47000070
+       waker=00000000
+  ```
+
+  This proves the priority-store loop/configuration no longer aborts and
+  execution entered the virtual-timer test. It does NOT yet prove IRQ
+  delivery/counts, MMU or USB success: the result lines were not reached.
+  Matching saved ELF identifies offset **0x1abc** as
+  **`msr cntp_ctl_el0, x0`**, x0 set to zero at 0x1ab4; previous instruction
+  at 0x1ab8 is `msr cntv_ctl_el0,x0`. This is irq_window's unconditional
+  cleanup of BOTH timers after the virtual-timer interval. ESR EC=0 is an
+  uncategorized/undefined-instruction exception, not the prior MMIO SEA.
+  Native physical-timer access availability is unproven; next on resume:
+  stop accessing CNTP in the virtual-only test, then recheck observed counts.
+  XNU's `pexpert/arm/pe_fiq.c` still has C volatile MMIO helpers; port the
+  same non-writeback access discipline there before a native kernel boot.
+  Private image, matching ELF and screen transcript saved in
+  `backup/dizi/diag-04-gic-vtimer-abort/`; do not rebuild over this evidence.
+  Panic register dump also fixes LR index to regs[31] (regs[29] was padding)
+  and preserves pre-write GIC state without extra MMIO in the exception.
+- **User paused the goal after boot 04 and requested recording only.**
+  Do not reboot the tablet or resume implementation until explicitly resumed.
+- USB diagnostic code is implemented but not yet hardware-verified. It runs
+  after GIC/MMU; all observed GIC panics occur before USB, so logger timeout does
+  not diagnose USB. Host logger boot-03 was PID 51670; check authoritative
+  process state before starting any new logger. No successful log captured.
+- GitHub CLI was unauthenticated after boot 03. New login was started in
+  exec session **45846**, and `n` was sent for Git credential-helper setup
+  in an interrupted call. Whether it reached the device-code stage is
+  unverified. Do not store auth codes/tokens. On resume poll that handle,
+  inspect `gh auth status` and process state before restarting authentication.
+  No remote repository created, code pushed, or Actions workflow dispatched.
+- Boot 04 fastboot session **20473**, USB logger session **3178** (wait 90s,
+  output target `backup/dizi/usb-probe-04.log`) were started before pause.
+  Their final output was not collected because the tool call was interrupted.
+  Do not infer process completion, USB enumeration or log capture from that.
+  Revalidate their handles/processes and current device state on resume.
+- Native XNU build and iPadOS boot remain incomplete. Preserve all Android,
+  ESP and Windows partitions; temporary fastboot boots only so far.
 
 ### Verified and saved
 
@@ -62,8 +126,8 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   Booting OKAY 0.345s. Android subsequently returned, sys.boot_completed=1.
   This proves bootloader acceptance/return ONLY. No diagnostic marker was
   recovered from pstore or /proc/last_kmsg; do not claim GIC/MMU success.
-  User was asked for the physical screen observation; answer still pending.
-  No second boot has been performed. New shim builds supersede that hash.
+  Subsequent physical screen observations are recorded above.
+  Later boots 02/03 and their observed failures are recorded above.
   Post-boot boot_a/b and vendor_boot_a/b hashes match the initial backups.
 - The loader now finds a raw payload after a vendor-ramdisk prefix, supports
   arbitrary source alignment, checks lengths/segments/entry/memory bounds,
