@@ -1,0 +1,23 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -2271,10 +2271,17 @@
+ _enable_virtual_timer(void)
+ {
+ 	uint64_t cntvctl = CNTV_CTL_EL0_ENABLE; /* One wants to use 32 bits, but "mrs" prefers it this way */
++	int dizihw = 0;
+ 
++	PE_parse_boot_argn("dizihw", &dizihw, sizeof(dizihw));
+ 	__builtin_arm_wsr64("CNTV_CTL_EL0", cntvctl);
+-	/* disable the physical timer as a precaution, as its registers reset to architecturally unknown values */
+-	__builtin_arm_wsr64("CNTP_CTL_EL0", CNTP_CTL_EL0_IMASKED);
++	/* Gunyah on dizi traps CNTP_CTL_EL0 writes as undefined instructions
++	 * (panic at the msr). Its physical timer PPI is not enabled, so the
++	 * precaution below is unnecessary; the virtual timer is the OS timer. */
++	if (!dizihw) {
++		/* disable the physical timer as a precaution, as its registers reset to architecturally unknown values */
++		__builtin_arm_wsr64("CNTP_CTL_EL0", CNTP_CTL_EL0_IMASKED);
++	}
+ }
+ 
+ void

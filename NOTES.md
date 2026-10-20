@@ -11,6 +11,28 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 XNU executed on the POCO Pad (screen evidence).** After the
+  first temporary XNU payload boot, the user observed on the tablet:
+  `kprintf initialized`, `pe_arm_map_interrupt_controller`,
+  `SWEET GIC: virtual timer INTID 27`, then an XNU panic
+  `Undefined kernel instruction @ sleh.c:951`. The faulting instruction is
+  `0xD51BE228` = `msr CNTP_CTL_EL0, x8`. This proves the dizi platform
+  patch, early console and GIC mapping ran inside XNU; it does NOT prove
+  userland or iPadOS. The screen is the diagnostic channel because the
+  panic happens before bsd_init/USB. The device was left hung.
+- Root cause: `osfmk/arm64/machine_routines.c:_enable_virtual_timer()`
+  writes `CNTP_CTL_EL0` as a precaution after enabling the virtual timer.
+  Gunyah traps physical-timer control writes as undefined instructions
+  (the shim hit the same trap in diagnostic boot 04). **Patch 0087** skips
+  that single write when the boot-arg `dizihw=1` is present; the physical
+  timer PPI is not enabled and the virtual timer remains the OS timer.
+  `machine_routines.c` passes the CI-flag syntax check and the patch
+  applies cleanly on the pre-edit file.
+- Next: reset the tablet (Power + Volume Down), build the 0087 kernel in
+  CI with `dizihw=1` in the cmdline, and use the 0085 early USB hook +
+  0086 EP0 log to capture the next boot. Until bsd_init is reached, the
+  screen remains the only channel.
+
 - **2026-10-20 first XNU hardware boot attempt (0084, read-only UFS plan)
   did not reach USB.** `fastboot boot` of the 16,432 KB image returned
   Sending OKAY (0.379s) / Booting OKAY (0.344s). The host then saw the
