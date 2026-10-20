@@ -1,0 +1,240 @@
+/* Identity-free CPU topology excerpt of saved dizi live FDT.
+ * Original CPU/cache/cpu-map nodes; no MAC, serial, or firmware.
+ */
+/ {
+	cpus {
+		#address-cells = <0x02>;
+		#size-cells = <0x00>;
+
+		CPU0: cpu@0 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x00>;
+			capacity-dmips-mhz = <0x400>;
+			dynamic-power-coefficient = <0x64>;
+			enable-method = "psci";
+			cpu-idle-states = <0x03 0x04>;
+			power-domains = <0x05>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x00 0x04>;
+			next-level-cache = <0x07>;
+			#cooling-cells = <0x02>;
+			phandle = <0x19>;
+
+			L2_0: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x07>;
+
+				L3_0: l3-cache {
+					compatible = "arm,arch-cache";
+					cache-level = <0x03>;
+					phandle = <0x08>;
+				};
+			};
+		};
+
+		CPU1: cpu@100 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x100>;
+			capacity-dmips-mhz = <0x400>;
+			dynamic-power-coefficient = <0x64>;
+			enable-method = "psci";
+			cpu-idle-states = <0x03 0x04>;
+			power-domains = <0x09>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x00 0x04>;
+			next-level-cache = <0x0a>;
+			#cooling-cells = <0x02>;
+			phandle = <0x1a>;
+
+			L2_1: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x0a>;
+			};
+		};
+
+		CPU2: cpu@200 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x200>;
+			capacity-dmips-mhz = <0x400>;
+			dynamic-power-coefficient = <0x64>;
+			enable-method = "psci";
+			cpu-idle-states = <0x03 0x04>;
+			power-domains = <0x0b>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x00 0x04>;
+			next-level-cache = <0x0c>;
+			#cooling-cells = <0x02>;
+			phandle = <0x1b>;
+
+			L2_2: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x0c>;
+			};
+		};
+
+		CPU3: cpu@300 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x300>;
+			capacity-dmips-mhz = <0x400>;
+			dynamic-power-coefficient = <0x64>;
+			enable-method = "psci";
+			cpu-idle-states = <0x03 0x04>;
+			power-domains = <0x0d>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x00 0x04>;
+			next-level-cache = <0x0e>;
+			#cooling-cells = <0x02>;
+			phandle = <0x1c>;
+
+			L2_3: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x0e>;
+			};
+		};
+
+		CPU4: cpu@400 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x400>;
+			capacity-dmips-mhz = <0x799>;
+			dynamic-power-coefficient = <0x1e3>;
+			enable-method = "psci";
+			cpu-idle-states = <0x0f 0x10>;
+			power-domains = <0x11>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x01 0x04>;
+			next-level-cache = <0x12>;
+			#cooling-cells = <0x02>;
+			phandle = <0x1d>;
+
+			L2_4: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x12>;
+			};
+		};
+
+		CPU5: cpu@500 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x500>;
+			capacity-dmips-mhz = <0x799>;
+			dynamic-power-coefficient = <0x1e3>;
+			enable-method = "psci";
+			cpu-idle-states = <0x0f 0x10>;
+			power-domains = <0x13>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x01 0x04>;
+			next-level-cache = <0x14>;
+			#cooling-cells = <0x02>;
+			phandle = <0x1e>;
+
+			L2_5: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x14>;
+			};
+		};
+
+		CPU6: cpu@600 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x600>;
+			capacity-dmips-mhz = <0x799>;
+			dynamic-power-coefficient = <0x1e3>;
+			enable-method = "psci";
+			cpu-idle-states = <0x0f 0x10>;
+			power-domains = <0x15>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x01 0x04>;
+			next-level-cache = <0x16>;
+			#cooling-cells = <0x02>;
+			phandle = <0x1f>;
+
+			L2_6: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x16>;
+			};
+		};
+
+		CPU7: cpu@700 {
+			device_type = "cpu";
+			compatible = "qcom,kryo";
+			reg = <0x00 0x700>;
+			capacity-dmips-mhz = <0x799>;
+			dynamic-power-coefficient = <0x1e3>;
+			enable-method = "psci";
+			cpu-idle-states = <0x0f 0x10>;
+			power-domains = <0x17>;
+			power-domain-names = "psci";
+			qcom,freq-domain = <0x06 0x01 0x04>;
+			next-level-cache = <0x18>;
+			#cooling-cells = <0x02>;
+			phandle = <0x20>;
+
+			L2_7: l2-cache {
+				compatible = "arm,arch-cache";
+				cache-level = <0x02>;
+				next-level-cache = <0x08>;
+				phandle = <0x18>;
+			};
+		};
+
+		cpu-map {
+
+			cluster0 {
+
+				core0 {
+					cpu = <0x19>;
+				};
+
+				core1 {
+					cpu = <0x1a>;
+				};
+
+				core2 {
+					cpu = <0x1b>;
+				};
+
+				core3 {
+					cpu = <0x1c>;
+				};
+			};
+
+			cluster1 {
+
+				core0 {
+					cpu = <0x1d>;
+				};
+
+				core1 {
+					cpu = <0x1e>;
+				};
+
+				core2 {
+					cpu = <0x1f>;
+				};
+
+				core3 {
+					cpu = <0x20>;
+				};
+			};
+		};
+	};
+};

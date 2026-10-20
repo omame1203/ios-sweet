@@ -13,6 +13,8 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21 source integration commit/CI:** `e1ab9a4` adds 0107–0111 plus source-only tests; pushed to `fork/pocopad-dizi`. Pre-push `tools/validate-repo.py`, full `tests/test-dizi-port.py`, individual 0107/0108/0109/0110/0111 host suites, SHA256SUMS for previously successful 0106 kernel, and `git diff --check` all passed. New macOS full XNU build workflow run `39470099403` at https://github.com/omame1203/ios-sweet/actions/runs/39470099403 (running when written; result pending). No boot, hardware access, or flash.
+
 - **2026-10-21 software-only 0107–0111 integration checkpoint (NEW Mac
   full-link result pending):** Added 0107 source-validated optional 4+4
   A55/A78 CPU topology and identity-free 5 KB tracked FDT CPU excerpt;
