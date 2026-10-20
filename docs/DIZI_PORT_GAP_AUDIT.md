@@ -181,3 +181,5 @@ to the CPU count without latency measurements.
 - SMP: topology metadata available opt-in, `cpus=1` baseline maintained, no proven secondary-core PSCI/GICR bringup.
 - USB: Apple IONetworkingFamily collides with existing fake IONetworkController and duplicates ifnet; no integration permitted without ownership redesign.
 - Wi-Fi/Bluetooth, GPU, ADSP audio, cameras, sensors, pen, suspend/resume and secure-world compatibility remain outstanding; source/runtime implementation and provenance needed.
+
+- **0112/0113 macOS link verified:** Actions `39472174737` succeeded, 17,283,968-byte ARM64 Mach-O kernel hash `be1e5f73200fd6136e0503ffb4a92673561b45adbdbb1206372649d1f8c8b422`; no real hardware behavior proven.
