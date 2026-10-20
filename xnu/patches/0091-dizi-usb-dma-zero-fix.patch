@@ -1,0 +1,16 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -924,7 +924,11 @@
+ 			printf("SWEET USB: dizi DMA map failed\n");
+ 			return;
+ 		}
+-		bzero((void *)ud.dma, UD_SIZE);
++		/* The fixed buffer is Device-nGnRnE via ml_io_map; a wide bzero
++		 * (dc zva/stp) faults with an unaligned data abort. Zero it with
++		 * aligned 32-bit stores instead. */
++		for (unsigned i = 0; i < UD_SIZE / sizeof(uint32_t); i++)
++			((volatile uint32_t *)ud.dma)[i] = 0;
+ 	} else {
+ 		if (kmem_alloc_contig(kernel_map, &ud.dma, UD_SIZE, PAGE_MASK, 0, 0,
+ 		    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
