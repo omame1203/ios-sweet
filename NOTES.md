@@ -11,6 +11,20 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-20 CI #3 (proper 0087 CNTP fix) succeeded** at head
+  `3e315d0`; kernel SHA-256
+  `b66f09e9b41e3f945cbceacdaeac7d855a1f40c9d082fc9910773c3e4c917990`,
+  downloaded to `xnu/out-0087/`. CI #4 (`39412338910`, 0088 bsd_init
+  markers + 0089 HFS markers) is building on `pocopad-dizi` (`cfab6f1`).
+  The 0089 HFS file cannot be syntax-checked locally because its `hfs.h`
+  include path is supplied by the CI HFS staging; the CI build is the
+  compile gate. If 0089 fails, drop it and keep 0088.
+- Next test: download the run-4 kernel, build the payload with
+  `dizihw=1` + `rd=md0` + `sweetearlyusb=1 sweetusb=2 diziusb=1`, and
+  boot with `tools/dizi-kernel-usb-diag.sh`/`dizi-usb-log.py`. The
+  bsd_init/HFS markers identify the post-AMFI hang; the early USB EP0 log
+  is reachable only after `net_init_run`.
+
 - **2026-10-20 post-AMFI hang is likely inside `sweet_hfs_register()`.** The
   AMFI log is followed immediately by `sweet_hfs_register()` in
   `bsd_init.c:707`; the screen did not show its final
