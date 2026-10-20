@@ -1,0 +1,91 @@
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -9,6 +9,44 @@
+ #include <IOKit/IOPlatformExpert.h>
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOLib.h>
++#include <pexpert/pexpert.h>
++
++extern "C" void sweet_usb_copy_mac(uint8_t *address);
++
++/*
++ * The BSD USB Ethernet driver does not use IONetworkingFamily. Publish its
++ * address separately for IOKit identity queries, even while the link is off.
++ * iPadOS 16 MobileGestalt waits for an IONetworkController and searches its
++ * local-mac-address while computing UniqueDeviceID. Without one, lsd's
++ * initial application database seeding and SpringBoard both wait indefinitely.
++ * This is identity metadata only: IOService's default newUserClient rejects
++ * opens, and no Ethernet/Wi-Fi transport is advertised or implemented here.
++ */
++class IONetworkController : public IOService {
++	OSDeclareDefaultStructors(IONetworkController);
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++OSDefineMetaClassAndStructors(IONetworkController, IOService);
++
++bool
++IONetworkController::start(IOService *provider)
++{
++	uint8_t address[6];
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	sweet_usb_copy_mac(address);
++	setName("ue0");
++	if (!setProperty("local-mac-address", address, sizeof(address)) ||
++	    !setProperty("IOMACAddress", address, sizeof(address)) ||
++	    !setProperty("sweet-identity-only", kOSBooleanTrue)) {
++		return false;
++	}
++	registerService();
++	IOLog("SWEET NETID: published offline USB Ethernet identity\n");
++	return true;
++}
+ 
+ class SweetPlatformExpert : public IODTPlatformExpert {
+ 	OSDeclareDefaultStructors(SweetPlatformExpert);
+@@ -31,6 +69,24 @@
+ 	}
+ 	registerService();
+ 	IOLog("SWEET: platform expert registered\n");
++	int netid = 0, dizi = 0;
++	PE_parse_boot_argn("sweetnetid", &netid, sizeof(netid));
++	PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
++	if (netid != 0 && dizi != 0) {
++		IONetworkController *identity = new IONetworkController;
++		bool attached = false;
++		if (identity != NULL && identity->init()) {
++			attached = identity->attach(this);
++			if (attached && !identity->start(this)) {
++				identity->detach(this);
++				attached = false;
++			}
++		}
++		if (!attached) {
++			IOLog("SWEET NETID: identity publication failed\n");
++		}
++		OSSafeReleaseNULL(identity);
++	}
+ 	return true;
+ }
+ 
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -430,6 +430,16 @@
+ };
+ static const uint8_t ud_phone_mac[ETHER_ADDR_LEN] = { 0x02, 0x00, 0x5e, 0x77, 0xee, 0x02 };
+ 
++/* IOKit identity publication uses the same locally administered USB address.
++ * This accessor does not initialize or access the USB hardware. */
++void sweet_usb_copy_mac(uint8_t *address);
++void
++sweet_usb_copy_mac(uint8_t *address)
++{
++	memcpy(address, ud_phone_mac, ETHER_ADDR_LEN);
++}
++
++
+ static uint32_t
+ ud_string(unsigned idx, uint8_t *out)
+ {

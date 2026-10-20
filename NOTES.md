@@ -13,6 +13,40 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **0098 candidate: publish the existing virtual USB NIC identity to IOKit**.
+  Latest capture `logs/ipados-lsd-saved.txt` (136810 bytes; total
+  `0x25249`) includes lsd[89] sample 0. Symbolicated report:
+  `research/ipad5/ipados-lsd-symbolicated.txt`. lsd main thread waits in
+  `_LSInstallProgressService performJournalRecovery`; its seeding worker
+  waits in MobileGestalt during InstalledContentLibrary's
+  `GenerateBuiltInAppInstallSessionID`. Another worker explicitly waits
+  for the database to finish seeding. This explains the downstream
+  SpringBoard wait; GUI boot completion is still unverified.
+- Actual disassembly narrows the MobileGestalt request to **UniqueDeviceID**:
+  caller's CFString at 0x1d88741d8 contains the obfuscated key
+  `re6Zb+zwFKJNlkQTUeT+/w`, exactly base64(MD5("MGCopyAnswerUniqueDeviceID"))
+  without padding. The active callback constructs an `IONetworkController`
+  match and reads `local-mac-address`. No such IOKit class/service exists
+  in this port, even though the BSD USB gadget has a fixed local MAC.
+  Reports `mg-identity-disassembly.txt`, `mg-network-callback.txt`,
+  `mg-wait*.txt`, private `cache-read.py`. No real device identifier exposed.
+- Patch `0098-dizi-usb-network-identity.patch` adds an opt-in IOKit
+  IONetworkController identity service, named ue0, with local-mac-address
+  and IOMACAddress copied directly from the BSD gadget's existing local
+  address. It accesses no USB registers, opens no packet transport, and
+  inherits IOService's unsupported user-client behavior. Explicit
+  `sweetnetid=1 dizihw=1` required; off by default for both boards.
+  This is offline virtual-NIC metadata, not a Wi-Fi implementation or
+  evidence of USB networking. No userland file/signature changes.
+- Validation: C USB translation unit compiles to a real Mach-O object
+  including `_sweet_usb_copy_mac`; C++ syntax/API check passes with the
+  documented `--syntax-compat` allocator builtins. Host clang lacks Apple
+  C++ allocator builtins, so that is NOT a bootable C++ object; full
+  Apple-toolchain CI still required. Reverse patch check, repository
+  validator (97 files through 0098) and diff whitespace check pass.
+  Host HFS root read-only mount now unmounted. Tablet reset by log-reader;
+  check FASTBOOT before the next temporary native boot. No flash performed.
+
 - **2026-10-21 LaunchServices wait isolated; targeted sampler trial active**:
   photo `/home/steam/Downloads/PXL_20261020_145519851.jpg` shows a central
   Apple logo and console text in the margins; photo alone cannot exclude
@@ -47,7 +81,7 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   symbols and the per-run shared-cache slide. Private helper
   `research/ipad5/symbolicate-samples.py` and reports beside it. Root image
   mounted READ-ONLY at `research/ipad5/verify-root-ro` during analysis;
-  unmount after the pending lsd symbolication. No Apple files tracked.
+  unmounted after lsd symbolication. No Apple files tracked.
 
 - **Native iPadOS userland and framebuffer swaps now directly captured**:
   after the user's reset, the existing read-only UFS log-reader shim
