@@ -13,6 +13,83 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **Input probe01 succeeded on hardware**: `logs/dizi-input-probe01.txt`
+  (4373 bytes) confirms arbiter v7 `0x70000000`, 768 APIDs, PON PPID0x013
+  -> APID0x198, owner0, RT0x10; PM6450 GPIO1 PPID0x188 -> APID0x1b0,
+  owner0, RT1, mode0, enable0x80, subtype0x10. Thus observer reads and
+  firmware's volume-up input configuration are live. Image probe01 SHA-256
+  `c06beb1986e2f4e2baf117009e5b2a1a2ff218d5fcdcf0ae8b72b27894a30095`;
+  temporary send/boot 0.007s/0.349s. No physical key transition test yet.
+  TLMM10/11/12 cfg1, pin13 cfg0x2c3, GPIO54 cfg0/IO0; SPI SE clock
+  CBCR0x80004220 off, wrapper AHB clocks on. GCC source19.2MHz inherited;
+  withheld SE-register reads while SE clock is off.
+- **Probe02 temporary SPI-clock vote trial issued**: opt-in
+  DIZI_INPUT_SPI_CLOCK=1 votes GCC0x162008 bits25/20/21 only, reads SPI
+  status/firmware/FIFO/DMA state if all clocks on, then restores the exact
+  vote. No source/divider/pinmux/firmware/PMIC config changes. Image
+  `shim-boot-input-probe02.img` SHA-256
+  `d9313dd08d3543961717bc458990ecba3ddc20ef8f4bc1b522b42bfdb0f46cff`;
+  fastboot send/boot0.007s/0.347s. Capture `logs/dizi-input-probe02.txt`
+  (logger session80435 redirected to .out). Await result.
+- **Patch0099 implemented for native keys/HID geometry**:
+  `0099-dizi-keys-and-hid-coordinates.patch` selects only dizi's measured
+  v7 SPMI regions, APID/owner/observer offsets and GEN3 PON bits when
+  dizihw=1. Existing sweet v5 remains selected otherwise; validates the
+  expected version/count before reading. With sweetkeys=1, keys poll at
+  20ms and publish existing HID events. Optional `dizihomekey=1` maps
+  volume-up to Home; default preserves VolumeUp. Firmware's PMIC input
+  settings stay unchanged; only observer EXT_READL commands written.
+  Explicit no-writeback MMIO instructions used for Gunyah.
+- SweetHIDTouch now gets dizi panel/canvas sizes from ADT, transforms
+  1600x2560 panel pixels to centered1536x2048 (offset -32,-256), clips the
+  letterbox, and tags edges in logical display coordinates. This is only
+  the event layer, NOT Novatek SPI transport yet. `sweethidtestonce=1`
+  optionally limits the existing Home test to one press/release, so tests
+  won't eject apps every60s. Default legacy behavior retained.
+  Native key C TU compiled to a real arm64 Mach-O object; C++ syntax/API
+  check passes with allocator builtin compatibility only. Coordinate
+  corner/center/bounds host MODEL checked; actual touch not yet tested.
+  Reverse patch check, repo validator (98 files through0099), whitespace
+  pass. Next full Apple-toolchain CI, then physical keys + touch transport.
+
+- **2026-10-21 user requested lock release + real touch input; HOME SCREEN
+  now confirmed by user.** Known-good kernel/ADT unchanged, temporary image
+  `shim/out/dizi/shim-boot-ipados0098-home.img` adds only `sweethidtest=60`.
+  Existing SweetHIDButtons sends Consumer Menu down/up (100 ms apart) every
+  60 s, at most 30 presses. User says "ホーム画面が出ました" after this boot.
+  This verifies the HID Home -> unlock path, NOT physical key/touch input.
+  SHA-256 `d48040691c3225586dd3525b352d4da9c771a640b9f6c38e03cd996cbc58c7ac`;
+  payload embedded verified; fastboot send/boot 0.379s/0.344s at 00:29:42 JST.
+  Ongoing work: real input; do not stop at this automated diagnostic.
+- Touch reference is already available locally: MiCode ruan-u-oss pinned
+  `2a4b42390bedbbc4e46e4c8e70c84351cf37e78f`,
+  `research/xiaomi-ruan/drivers/input/touchscreen/nt36532_spi/`, matching
+  Android dmesg module nt36532_spi and live compatible novatek,NVT-ts-spi.
+  SPI SE 0xa8c000 size0x4000, CS0, 9.6MHz, TLMM10/11/12/13 with mux1,
+  IRQ GPIO54 active-low. TLMM base0xf000000, per-pin registers at
+  base+0x100000+0x1000*pin (NOT sweet's north-bank offsets).
+  Source uses super-resolution 16000x25600 and 108-byte touch reports;
+  SPI reads add 1 dummy byte and copy rx[2..]; 10 contacts.
+  BOOT_UPDATE_FIRMWARE=1, SRAM firmware download used by Android; binaries
+  novatek_ts_fw_boe.bin / novatek_ts_fw_csot.bin not yet acquired. Must
+  inspect inherited firmware before deciding if a RAM download is needed.
+- FDT physical keys: primary SPMI v7 core0xc400000/0x3000,
+  cnfg0xc42d000/0x4000, observer0xc440000/0x80000, EE0/bus0.
+  v7 map core+0x2000+4*APID, owner cnfg+4*APID, observer +0x20*APID.
+  PMK8350 HLOS PON SID0 base0x1300 RT0x1310 bits7(power)/6(voldown).
+  Volume-up: PM6450 GPIO1 (DT specifier1 is ONE-BASED), SID1 base0x8800,
+  RT0x8810 bit0 active-low; do not accidentally use GPIO2/0x8900.
+  sweet's PM6150 addresses/layout must remain disabled.
+- Optional no-payload `DIZI_INPUT_DIAG=1` shim now prepared: reads SPMI
+  version/APID map, issues observer EXT_READL to the two key peripherals,
+  reads TLMM GPIO configuration and SPI GCC clocks; withholds SE reads if
+  clocks are off. No PMIC config/GPIO/touch/flash writes, bounded polling,
+  explicit no-writeback MMIO instructions for Gunyah. Image
+  `shim/out/dizi/shim-boot-input-probe01.img`; next recover its USB log
+  after user reset, then implement native keys and Novatek path from
+  measured values. Existing SweetHIDTouch geometry is phone-hardcoded
+  1080x2400/1125x2436 and needs dizi 1600x2560 -> centered1536x2048.
+
 - **MILESTONE 2026-10-21: native iPadOS LOCK SCREEN visually verified**.
   User photo `/home/steam/Downloads/PXL_20261020_152532603.jpg` clearly
   shows SpringBoard's date/clock, battery icon and "Press home to open";

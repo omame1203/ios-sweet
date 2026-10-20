@@ -24,9 +24,15 @@ fi
 if [ "$BOARD" = dizi ] && [ "${DIZI_UFS_LOG:-0}" = 1 ]; then
 	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_UFS_LOG"
 fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_DIAG:-0}" = 1 ]; then
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_DIAG"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_SPI_CLOCK:-0}" = 1 ]; then
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_SPI_CLOCK"
+fi
 mkdir -p "$OUT"
 objects=()
-for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c bootlog.c usb_control.c usb_diag.c; do
+for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c input_diag.c bootlog.c usb_control.c usb_diag.c; do
 	$CC $CFLAGS $BOARD_FLAGS -c "$f" -o "$OUT/${f%.*}.o"
 	objects+=("$OUT/${f%.*}.o")
 done

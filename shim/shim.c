@@ -490,6 +490,11 @@ void shim_main(uint64_t dtb)
 	stage = "dizi read-only UFS diagnostic";
 	test_ufs();
 #endif
+#ifdef DIZI_INPUT_DIAG
+	stage = "dizi input inventory";
+	extern void dizi_input_diag(void);
+	dizi_input_diag();
+#endif
 	stage = "dizi USB diagnostic";
 	int usb_rc = 0;
 #ifdef DIZI_USB_DIAG

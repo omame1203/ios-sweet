@@ -1,0 +1,262 @@
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -27,7 +27,9 @@
+ static vm_offset_t keys_core, keys_obs, keys_cnfg;
+ static uint16_t keys_pon_apid = KEYS_NO_APID, keys_gpio_apid = KEYS_NO_APID;
+ static uint32_t keys_version, keys_last_status;
+-static bool keys_started;
++static bool keys_started, keys_dizi;
++static int keys_home;
++static uint16_t keys_pon_rt = KEYS_PON_RT, keys_gpio_rt = KEYS_GPIO_RT;
+ static int keys_sleep_chan;
+ 
+ static uint32_t
+@@ -44,11 +46,11 @@
+ {
+ 	uint16_t found = KEYS_NO_APID;
+ 	for (uint32_t i = 0; i < count; ++i) {
+-		uint32_t map = keys_rd(keys_core, 0x900u + 4u * i);
++		uint32_t map = keys_rd(keys_core, (keys_dizi ? 0x2000u : 0x900u) + 4u * i);
+ 		if (map == 0 || ((map >> 8) & 0xfffu) != ppid) {
+ 			continue;
+ 		}
+-		uint32_t owner = keys_rd(keys_cnfg, 0x700u + 4u * i) & 7u;
++		uint32_t owner = keys_rd(keys_cnfg, (keys_dizi ? 0u : 0x700u) + 4u * i) & 7u;
+ 		if (found == KEYS_NO_APID || owner == 0) {
+ 			found = (uint16_t)i;
+ 		}
+@@ -62,10 +64,10 @@
+ 	if (apid == KEYS_NO_APID) {
+ 		return false;
+ 	}
+-	uint32_t off = 0x80u * apid; /* obs + EE(0)*0x10000 */
++	uint32_t off = (keys_dizi ? 0x20u : 0x80u) * apid; /* obs + EE(0)*0x10000 */
+ 	uint32_t cmd = (1u << 27) | ((uint32_t)(addr & 0xffu) << 4);
+ 	__asm__ volatile("dmb oshst" ::: "memory");
+-	*(volatile uint32_t *)(keys_obs + off) = cmd; /* EXT_READL, one byte */
++	__asm__ volatile ("str %w0, [%1]" : : "r"(cmd), "r"(keys_obs + off) : "memory"); /* EXT_READL only */
+ 	__asm__ volatile("dsb osh" ::: "memory");
+ 	for (unsigned i = 0; i < 1000; ++i) {
+ 		keys_last_status = keys_rd(keys_obs, off + 0x08u);
+@@ -99,9 +101,10 @@
+ 	(void)result;
+ 	for (;;) {
+ 		uint8_t pon = 0, gpio = 0;
+-		bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
+-		bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+-		int now[3] = {!!(pon & 1u), !(gpio & 1u), !!(pon & 2u)};
++		bool pok = keys_read(keys_pon_apid, keys_pon_rt, &pon);
++		bool gok = keys_read(keys_gpio_apid, keys_gpio_rt, &gpio);
++		int now[3] = {!!(pon & (keys_dizi ? 0x80u : 1u)), !(gpio & 1u),
++		    !!(pon & (keys_dizi ? 0x40u : 2u))};
+ 		if (!pok || !gok) {
+ 			if ((errors++ % 250u) == 0) {
+ 				printf("SWEET KEYS: read error pon-ok=%d gpio-ok=%d arb-status=%#x\n",
+@@ -113,9 +116,9 @@
+ 		for (int k = 0; k < 3; ++k) {
+ 			if ((k == 1 ? gok : pok) && now[k] != state[k]) {
+ 				state[k] = now[k];
+-				printf("SWEET KEYS: key=%d down=%d pon=%#x gpio4:c110=%#x\n",
++				printf("SWEET KEYS: key=%d down=%d pon=%#x gpio=%#x\n",
+ 				    k, state[k], pon, gpio);
+-				sweet_hid_key(k, state[k]);
++				sweet_hid_key(keys_dizi && keys_home && k == 1 ? 3 : k, state[k]);
+ 			}
+ 		}
+ 		keys_wait();
+@@ -136,29 +139,39 @@
+ 		printf("SWEET KEYS: disabled (sweetkeys=0)\n");
+ 		return;
+ 	}
+-	keys_core = ml_io_map(KEYS_CORE_PA, 0x2000);
+-	keys_cnfg = ml_io_map(KEYS_CNFG_PA, 0x1000);
+-	keys_obs = ml_io_map(KEYS_OBS_PA, 0x10000);
++	int dizi = 0;
++	PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
++	keys_dizi = dizi != 0;
++	PE_parse_boot_argn("dizihomekey", &keys_home, sizeof(keys_home));
++	/* Dizi live FDT + MiCode's v7 arbiter/GEN3 PON/GPIO1 definitions.
++	 * GPIO specifier 1 is one-based: PM6450 GPIO1 is 0x8800, not 0x8900.
++	 * No PMIC configuration writes: keep the firmware's input setup. */
++	keys_core = ml_io_map(keys_dizi ? 0x0c400000 : KEYS_CORE_PA, keys_dizi ? 0x3000 : 0x2000);
++	keys_cnfg = ml_io_map(keys_dizi ? 0x0c42d000 : KEYS_CNFG_PA, keys_dizi ? 0x4000 : 0x1000);
++	keys_obs = ml_io_map(keys_dizi ? 0x0c440000 : KEYS_OBS_PA, keys_dizi ? 0x80000 : 0x10000);
++	keys_pon_rt = keys_dizi ? 0x1310 : KEYS_PON_RT;
++	keys_gpio_rt = keys_dizi ? 0x8810 : KEYS_GPIO_RT;
+ 	if (!keys_core || !keys_cnfg || !keys_obs) {
+ 		printf("SWEET KEYS: MMIO mapping failed\n");
+ 		return;
+ 	}
+ 	keys_version = keys_rd(keys_core, 0);
+ 	uint32_t count = keys_rd(keys_core, 4) & 0x7ffu;
+-	if (keys_version < 0x50000000u || keys_version >= 0x70000000u ||
+-	    count == 0 || count > 512) {
++	bool version_ok = keys_dizi ? keys_version >= 0x70000000u && keys_version < 0x80000000u :
++	    keys_version >= 0x50000000u && keys_version < 0x70000000u;
++	if (!version_ok || count == 0 || count > (keys_dizi ? 1024u : 512u)) {
+ 		printf("SWEET KEYS: unsupported arbiter version=%#x apids=%u\n",
+ 		    keys_version, count);
+ 		return;
+ 	}
+-	keys_pon_apid = keys_find_apid(0x008, count);
+-	keys_gpio_apid = keys_find_apid(0x4c1, count);
++	keys_pon_apid = keys_find_apid(keys_dizi ? 0x013 : 0x008, count);
++	keys_gpio_apid = keys_find_apid(keys_dizi ? 0x188 : 0x4c1, count);
+ 	uint8_t pon = 0, gpio = 0, mode = 0, en = 0, subtype = 0;
+-	bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
+-	bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+-	bool mok = keys_read(keys_gpio_apid, 0xc140, &mode);
+-	bool eok = keys_read(keys_gpio_apid, 0xc146, &en);
+-	bool sok = keys_read(keys_gpio_apid, 0xc105, &subtype);
++	bool pok = keys_read(keys_pon_apid, keys_pon_rt, &pon);
++	bool gok = keys_read(keys_gpio_apid, keys_gpio_rt, &gpio);
++	bool mok = keys_read(keys_gpio_apid, keys_dizi ? 0x8840 : 0xc140, &mode);
++	bool eok = keys_read(keys_gpio_apid, keys_dizi ? 0x8846 : 0xc146, &en);
++	bool sok = keys_read(keys_gpio_apid, keys_dizi ? 0x8805 : 0xc105, &subtype);
+ 	printf("SWEET KEYS: arb=%#x apids=%u pon-apid=%u gpio4-apid=%u pon=%#x/%d gpio=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
+ 	    keys_version, count, keys_pon_apid, keys_gpio_apid,
+ 	    pon, pok, gpio, gok, mode, mok, en, eok, subtype, sok);
+@@ -166,12 +179,14 @@
+ 	unsigned dir = subtype >= 0x10u && subtype <= 0x13u ?
+ 	    mode & 3u : (mode >> 4) & 7u;
+ 	if (!eok || !mok || !sok || !(en & 0x80u) || (dir != 0 && dir != 2)) {
+-		printf("SWEET KEYS: GPIO2 not confirmed enabled as input; volume-up withheld, PMIC unchanged\n");
++		printf("SWEET KEYS: volume-up GPIO not confirmed enabled as input; volume-up withheld, PMIC unchanged\n");
+ 		keys_gpio_apid = KEYS_NO_APID;
+ 	}
+ 	if (!pok && !gok) {
+ 		printf("SWEET KEYS: no readable keys; polling retained for recovery\n");
+ 	}
++	printf("SWEET KEYS: board=%s volume-up=%s\n", keys_dizi ? "dizi" : "sweet",
++	    keys_dizi && keys_home ? "Home" : "VolumeUp");
+ 	kern_return_t kr = kernel_thread_start(keys_thread, NULL, &thread);
+ 	if (kr == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -18,6 +18,8 @@
+  */
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOService.h>
++#include <IOKit/IODeviceTreeSupport.h>
++#include <libkern/c++/OSData.h>
+ #include <IOKit/IOTimerEventSource.h>
+ #include <libkern/c++/OSArray.h>
+ #include <pexpert/pexpert.h>
+@@ -339,6 +341,7 @@
+ 	IOTimerEventSource *fTest;
+ 	UInt32 fTestSecs;
+ 	UInt32 fTestCount;
++	int fTestOnce;
+ };
+ OSDefineMetaClassAndStructors(SweetHIDButtons, IOHIDEventService);
+ 
+@@ -367,7 +370,8 @@
+ 	virtual UInt32 getProductID() APPLE_KEXT_OVERRIDE { return 2; }
+ private:
+ 	IOLock *fLock;
+-	int fLogicalW, fLogicalH, fOffX, fOffY;
++	int fLogicalW, fLogicalH, fOffX, fOffY, fPanelW, fPanelH;
++	bool fDizi;
+ 	bool fDown[SWEET_TOUCH_FINGERS];
+ 	bool fEdge[SWEET_TOUCH_FINGERS];
+ 	IOFixed fX[SWEET_TOUCH_FINGERS];
+@@ -384,6 +388,7 @@
+ 	if (!IOHIDEventService::start(provider)) {
+ 		return false;
+ 	}
++	PE_parse_boot_argn("sweethidtestonce", &fTestOnce, sizeof(fTestOnce));
+ 	if (PE_parse_boot_argn("sweethidtest", &fTestSecs, sizeof(fTestSecs)) && fTestSecs) {
+ 		fTest = IOTimerEventSource::timerEventSource(this, &SweetHIDButtons::testFired);
+ 		if (fTest && _hidWorkLoop->addEventSource(fTest) == kIOReturnSuccess) {
+@@ -420,9 +425,20 @@
+ 	 */
+ 	bool press = (self->fTestCount & 1) == 0;
+ 	self->key(kHIDUsage_Csmr_Menu, press);
+-	if (++self->fTestCount < 60) {
++	if (++self->fTestCount < (self->fTestOnce ? 2u : 60u)) {
+ 		sender->setTimeoutMS(press ? 100 : self->fTestSecs * 1000);
+ 	}
++}
++
++static int
++sweet_hid_dimension(IORegistryEntry *entry, const char *key, int fallback)
++{
++	OSData *data = entry ? OSDynamicCast(OSData, entry->getProperty(key)) : NULL;
++	uint32_t value = 0;
++	if (data && data->getLength() == sizeof(value)) {
++		memcpy(&value, data->getBytesNoCopy(), sizeof(value));
++	}
++	return value > 0 && value <= 16384 ? (int)value : fallback;
+ }
+ 
+ bool
+@@ -436,15 +452,31 @@
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+ 	fLogicalW = native ? 1080 : 1125;
+ 	fLogicalH = native ? 2400 : 2436;
+-	fOffX = (fLogicalW - 1080) / 2;
+-	fOffY = (fLogicalH - 2400) / 2;
++	fPanelW = 1080;
++	fPanelH = 2400;
++	int dizi = 0;
++	PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
++	fDizi = dizi != 0;
++	if (fDizi) {
++		IORegistryEntry *fb = IORegistryEntry::fromPath("/sweet-fbcon", gIODTPlane);
++		IORegistryEntry *display = IORegistryEntry::fromPath("/arm-io/disp0", gIODTPlane);
++		fPanelW = sweet_hid_dimension(fb, "width", 1600);
++		fPanelH = sweet_hid_dimension(fb, "height", 2560);
++		fLogicalW = sweet_hid_dimension(display, "canvas-width", 1536);
++		fLogicalH = sweet_hid_dimension(display, "canvas-height", 2048);
++		OSSafeReleaseNULL(fb);
++		OSSafeReleaseNULL(display);
++	}
++	fOffX = (fLogicalW - fPanelW) / 2;
++	fOffY = (fLogicalH - fPanelH) / 2;
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+ 	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
+ 	setProperty("SurfaceHeight", (unsigned long long)(151 << 16), 32);
+ 	gSweetTouch = this;
+ 	registerService();
+-	IOLog("SWEET HID: touch registered\n");
++	IOLog("SWEET HID: touch registered panel %dx%d logical %dx%d offset %d,%d\n",
++	    fPanelW, fPanelH, fLogicalW, fLogicalH, fOffX, fOffY);
+ 	return true;
+ }
+ 
+@@ -458,22 +490,27 @@
+ 	if (finger < 0 || finger >= SWEET_TOUCH_FINGERS) {
+ 		return;
+ 	}
+-	x = x < 0 ? 0 : (x > 1079 ? 1079 : x);
+-	y = y < 0 ? 0 : (y > 2399 ? 2399 : y);
++	x = x < 0 ? 0 : (x >= fPanelW ? fPanelW - 1 : x);
++	y = y < 0 ? 0 : (y >= fPanelH ? fPanelH - 1 : y);
+ 
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+ 	/* Panel pixels -> the presented 1125x2436 display (SweetFramebuffer.cpp). */
+-	IOFixed nx = (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
+-	IOFixed ny = (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
++	int lx = x + fOffX, ly = y + fOffY;
++	lx = lx < 0 ? 0 : (lx >= fLogicalW ? fLogicalW - 1 : lx);
++	ly = ly < 0 ? 0 : (ly >= fLogicalH ? fLogicalH - 1 : ly);
++	IOFixed nx = (IOFixed)(((int64_t)lx << 16) / fLogicalW);
++	IOFixed ny = (IOFixed)(((int64_t)ly << 16) / fLogicalH);
+ 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
+ 	if (was == down && !moved) {
+ 		IOLockUnlock(fLock);
+ 		return;
+ 	}
+ 	if (!was && down) {
+-		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
+-		    y < SWEET_TOUCH_EDGE_PX || y > 2399 - SWEET_TOUCH_EDGE_PX;
++		int ex = fDizi ? lx : x, ey = fDizi ? ly : y;
++		int ew = fDizi ? fLogicalW : fPanelW, eh = fDizi ? fLogicalH : fPanelH;
++		fEdge[finger] = ex < SWEET_TOUCH_EDGE_PX || ex > ew - 1 - SWEET_TOUCH_EDGE_PX ||
++		    ey < SWEET_TOUCH_EDGE_PX || ey > eh - 1 - SWEET_TOUCH_EDGE_PX;
+ 	}
+ 
+ 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
