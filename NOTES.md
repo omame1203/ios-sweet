@@ -11,6 +11,34 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **0097 native UFS/HFS root success, launchd still killed** (user screen
+  transcription). User reports `dizi device ACTIVE ready (0)`, `"userdata"
+  on LUN 0`, `hfs: mounted iOSRoot on device b(1,0)`, BSD post-init done,
+  exec attempts `/usr/appleinternal/sbin/launchd.development` then
+  `/sbin/launchd`, followed by `unexpected SIGKILL of launchd (CS_KILLED)`.
+  This verifies native root mount and init exec attempt, NOT normal iPadOS
+  userland/GUI. `handshake structure not initialized` comes from kernel
+  coredump output (`osfmk/kdp/output_stages/out_shmem.c:499`), not launchd.
+- User reset to FASTBOOT; the read-only log-reader shim booted successfully
+  and `logs/native0097-saved-console.txt` (5669 bytes) reports **no saved
+  console header**. Do not claim positive persistent-log recovery; the
+  kernel may have panicked before its first flush (not established why).
+- Host root image mounted read-only, `/sbin/launchd` and `/usr/lib/dyld`
+  CodeDirectories parsed and all SHA-256 4 KiB page hashes checked:
+  launchd **127/127**, dyld **220/220** match. Both flags 0x2, CD v0x20400.
+  Results/hashes in `research/ipad5/codesign-host-check.json`. This only
+  proves the host image's files, not the tablet's copies or XNU's page path.
+  The host HFS+ module was loaded for this read and the mount was unmounted.
+- **0097 cs-debug trial issued**: same CI kernel, added `cs_debug=6
+  sweet_amfi_debug=1 panic_on_cs_killed=1`; no signing-enforcement bypass.
+  `shim/out/dizi/shim-boot-ufs0097-csdebug.img` SHA-256
+  `907469dbf50e574d415661aa7a53658c3eec97884b13516de2329d3494bc14a3`.
+  Fastboot send/boot accepted 0.379s/0.342s. Awaiting user transcription of
+  CODE SIGNING / invalid-page / rejecting lines and full SIGKILL reason.
+  Need distinguish exec signature failure from VM page hash/W+X/taint.
+  Do not guess a signature fix or disable validation solely on CS_KILLED.
+
+
 - **0097 native hardware trial in progress (USB disabled)**: CI
   39437053376 succeeded at f845ef1 (8m16s). Kernel SHA-256
   `5bd6a61275c28082c5e8afd55d7260c98e3b2a22c9d97fa21400c4feae96a1de`,
@@ -23,8 +51,8 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   `shim/out/dizi/shim-boot-ufs0097.img`, SHA-256
   `ff9b4888c010ee9370672e9a30dd06e56e4cd302a8cd2503c09cb292a4cd6087`.
   Fastboot product checked dizi; send OKAY 0.379s / boot OKAY 0.345s. Awaiting screen
-  observation (ACTIVE ready, BSD root/HFS, launchd or next panic). No claim
-  of native mount/userland success yet. Persistent log reader fallback is
+  observation was supplied: native HFS root mounted; launchd is killed,
+  as recorded above. No normal userland/GUI success yet. Persistent log reader fallback is
   ready; do not reset a potentially running userland without observation.
 
 
