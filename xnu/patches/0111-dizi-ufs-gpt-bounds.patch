@@ -1,0 +1,153 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -39,6 +39,7 @@
+ #include <pexpert/device_tree.h>
+ #include <libkern/libkern.h>
+ #include <machine/atomic.h>
++#include "dizi_ufs_gpt_bounds.h"
+ 
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ /* osfmk/arm/machine_routines.h, not exported to the BSD layer */
+@@ -371,7 +372,7 @@
+ static int
+ ufs_read_blocks(uint64_t lba, uint32_t count)
+ {
+-	if (lba > UINT32_MAX || count > BOUNCE_SIZE / UFS_BLOCK) {
++	if (!dizi_ufs_lba10_bounds(lba, count) || count > BOUNCE_SIZE / UFS_BLOCK) {
+ 		return EINVAL;
+ 	}
+ 	uint8_t cdb[10] = {
+@@ -391,7 +392,8 @@
+ {
+ 	if (!su.writable || !su.nblocks || count == 0 || count > BOUNCE_SIZE / UFS_BLOCK ||
+ 	    lba < su.first_block || lba - su.first_block >= su.nblocks ||
+-	    count > su.nblocks - (lba - su.first_block) || lba + count - 1 > UINT32_MAX) {
++	    count > su.nblocks - (lba - su.first_block) ||
++	    !dizi_ufs_lba10_bounds(lba, count)) {
+ 		printf("SWEET UFS: refusing write of %u blocks at 0x%llx\n", count, lba);
+ 		return EPERM;
+ 	}
+@@ -427,11 +429,13 @@
+ 	memcpy(&entry_lba, b + 72, 8);
+ 	memcpy(&nent, b + 80, 4);
+ 	memcpy(&esz, b + 84, 4);
+-	if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE) {
++	uint32_t table_blocks = 0;
++	if (!dizi_ufs_gpt_table_bounds(entry_lba, nent, esz,
++	    UFS_BLOCK, BOUNCE_SIZE, &table_blocks)) {
+ 		printf("SWEET UFS: unsupported GPT entries %u x %u\n", nent, esz);
+ 		return ENXIO;
+ 	}
+-	error = ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++	error = ufs_read_blocks(entry_lba, table_blocks);
+ 	if (error) {
+ 		return error;
+ 	}
+@@ -453,11 +457,13 @@
+ 		uint64_t first, last;
+ 		memcpy(&first, e + 32, 8);
+ 		memcpy(&last, e + 40, 8);
+-		if (last < first) {
++		uint64_t part_blocks = 0;
++		if (!dizi_ufs_gpt_partition_bounds(first, last, &part_blocks)) {
++			printf("SWEET UFS: GPT partition extent outside READ/WRITE(10) LBA range\n");
+ 			return ENXIO;
+ 		}
+ 		su.first_block = first;
+-		su.nblocks = last - first + 1;
++		su.nblocks = part_blocks;
+ 		return 0;
+ 	}
+ 	printf("SWEET UFS: no GPT partition named \"%s\"\n", want);
+@@ -518,13 +524,20 @@
+ {
+ 	int error = 0;
+ 	caddr_t vaddr = NULL;
+-	uint64_t off = (uint64_t)buf_blkno(bp) * su.secsize;
++	uint64_t off = 0;
+ 	uint32_t count = buf_count(bp);
+ 	uint64_t part_bytes = su.nblocks * UFS_BLOCK;
+ 
+ 	bool rd = buf_flags(bp) & B_READ;
+ 
+ 	buf_setresid(bp, count);
++	/* Signed negative block numbers must fail before multiplication: a cast
++	 * followed by an unchecked multiply can wrap to a valid partition offset. */
++	if (!dizi_ufs_partition_offset((int64_t)buf_blkno(bp), su.secsize,
++	    part_bytes, &off)) {
++		error = EINVAL;
++		goto done;
++	}
+ 	if (!rd && !su.writable) {
+ 		error = EROFS;
+ 		goto done;
+--- /dev/null
++++ b/bsd/dev/dizi_ufs_gpt_bounds.h
+@@ -0,0 +1,67 @@
++/* SPDX-License-Identifier: MIT
++ * Bounds shared with XNU's polled SWEET/dizi UFS root path.
++ * Pure integer checks; no storage, MMIO or DMA access.
++ */
++#ifndef DIZI_UFS_GPT_BOUNDS_H
++#define DIZI_UFS_GPT_BOUNDS_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++/* UFS uses READ/WRITE(10), so even an otherwise valid GPT extent may be
++ * unreachable. Refuse any extent outside the actual command address space. */
++static inline bool
++dizi_ufs_lba10_bounds(uint64_t lba, uint32_t count)
++{
++    return count != 0 && lba <= UINT32_MAX &&
++        (uint64_t)count <= (uint64_t)UINT32_MAX - lba + 1;
++}
++
++/* Reject overflow of nent*entry_size BEFORE doing that multiplication or
++ * requesting DMA into a fixed-size bounce buffer. This driver deliberately
++ * supports the 128-byte GPT entry format it already parsed before. */
++static inline bool
++dizi_ufs_gpt_table_bounds(uint64_t entry_lba, uint32_t nent,
++    uint32_t entry_size, uint32_t block_size, uint32_t bounce_size,
++    uint32_t *blocks_out)
++{
++    if (!blocks_out || !block_size || !bounce_size || entry_size != 128 ||
++        nent == 0 || nent > bounce_size / entry_size || entry_lba < 2) {
++        return false;
++    }
++    uint64_t bytes = (uint64_t)nent * entry_size;
++    uint64_t blocks = (bytes + block_size - 1) / block_size;
++    if (!blocks || blocks > UINT32_MAX ||
++        !dizi_ufs_lba10_bounds(entry_lba, (uint32_t)blocks)) {
++        return false;
++    }
++    *blocks_out = (uint32_t)blocks;
++    return true;
++}
++
++static inline bool
++dizi_ufs_gpt_partition_bounds(uint64_t first, uint64_t last,
++    uint64_t *blocks_out)
++{
++    if (!blocks_out || first == 0 || last < first || last > UINT32_MAX) {
++        return false;
++    }
++    *blocks_out = last - first + 1;
++    return *blocks_out != 0;
++}
++
++/* buf_blkno is signed. Casting a negative value to u64 and multiplying
++ * before checking it may wrap back into the partition's valid byte range. */
++static inline bool
++dizi_ufs_partition_offset(int64_t block_no, uint32_t sector_size,
++    uint64_t partition_bytes, uint64_t *offset_out)
++{
++    if (!offset_out || block_no < 0 || sector_size == 0 ||
++        (uint64_t)block_no > partition_bytes / sector_size) {
++        return false;
++    }
++    *offset_out = (uint64_t)block_no * sector_size;
++    return true;
++}
++
++#endif

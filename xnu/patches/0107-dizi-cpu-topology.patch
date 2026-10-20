@@ -1,0 +1,111 @@
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -102,7 +102,9 @@
+ 
+ #define MAX_L2_CLINE                   6
+ #define MAX_CPUS                       8
+-#define MAX_CPU_CLUSTERS               1
++/* Passive headroom for opt-in dizi E/P metadata. Sweet and dizi default
++ * remain one SMP cluster; this does NOT enable __ARM_AMP__ or CPU_ON. */
++#define MAX_CPU_CLUSTERS               2
+ 
+ #define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
+ 
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -962,6 +962,16 @@
+ 	if (cpu_boot_arg > SWEET_SMP_MAX_CPUS) {
+ 		cpu_boot_arg = SWEET_SMP_MAX_CPUS;
+ 	}
++	/* The dizi FDT has 4 E (A55) + 4 P (A78) cores, but their
++	 * PSCI/GICR multi-core runtime has not been proven. NEVER select
++	 * heterogeneous cluster metadata on the default cpus=1 boot.
++	 * Even a two-cluster ADT alone cannot opt into this XNU path. */
++	int dizi_platform = 0, dizi_cluster_requested = 0;
++	(void)PE_parse_boot_argn("dizihw", &dizi_platform, sizeof(dizi_platform));
++	(void)PE_parse_boot_argn("dizismpclusters", &dizi_cluster_requested,
++	    sizeof(dizi_cluster_requested));
++	boolean_t dizi_cluster_opt_in = dizi_platform == 1 &&
++	    dizi_cluster_requested == 1 && cpu_boot_arg > 1;
+ #endif
+ 
+ 	// The cpus=N and cpumask=N boot args cannot be used simultaneously. Flag this
+@@ -1034,6 +1044,28 @@
+ 		cpu->cluster_type = CLUSTER_TYPE_SMP;
+ 
+ 		int cluster_type = (int)ml_readprop(child, "cluster-type", 0);
++#if defined(SWEET)
++		if (dizi_platform == 1) {
++			if (!dizi_cluster_opt_in) {
++				/* Explicitly retain single-SMP topology for cpus=1,
++				 * even if the ADT contains E/P descriptions. */
++				cluster_type = 0;
++			} else {
++				/* Only this FDT layout (Aff1=physical core index) has
++				 * been validated offline; reject mismatched opt-in ADTs. */
++				uint32_t mpidr = cpu->phys_id;
++				uint32_t core = mpidr >> 8;
++				int expected = core < 4u ? 'E' : 'P';
++				if ((mpidr & 0xffu) != 0 || core >= 8u ||
++				    cluster_type != expected ||
++				    (uint32_t)ml_readprop(child, "capacity-dmips-mhz", 0) !=
++				    (core < 4u ? 0x400u : 0x799u) ||
++				    (uint32_t)ml_readprop(child, "dizi,topology-v1", 0) != 1u) {
++					panic("DIZI SMP: invalid opt-in CPU ADT phys_id=%#x type=%#x", mpidr, cluster_type);
++				}
++			}
++		}
++#endif
+ 		if (cluster_type == 'E') {
+ 			cpu->cluster_type = CLUSTER_TYPE_E;
+ 		} else if (cluster_type == 'P') {
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -79,10 +79,35 @@
+ 		panic("SWEET CPU: invalid topology cpu=%u mpidr=0x%x count=%u",
+ 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
+ 	}
++	int dizi_hw = 0, requested_clusters = 0, requested_cpus = 1;
++	(void)PE_parse_boot_argn("dizihw", &dizi_hw, sizeof(dizi_hw));
++	(void)PE_parse_boot_argn("dizismpclusters", &requested_clusters,
++	    sizeof(requested_clusters));
++	(void)PE_parse_boot_argn("cpus", &requested_cpus, sizeof(requested_cpus));
++	bool dizi = dizi_hw == 1;
++	bool experimental_clusters = dizi && requested_clusters == 1 && requested_cpus > 1;
++	if (dizi && experimental_clusters) {
++		unsigned core = cpu->phys_id >> 8;
++		cluster_type_t expected = core < 4u ? CLUSTER_TYPE_E : CLUSTER_TYPE_P;
++		if (cpu->cluster_type != expected || cpu->cluster_id != core / 4u ||
++		    cpu->cluster_core_id != (int)(core % 4u)) {
++			panic("DIZI SMP: bad XNU CPU topology core=%u cluster=%u type=%u",
++			    core, cpu->cluster_id, cpu->cluster_type);
++		}
++	}
+ 	if (!IOCPU::start(provider)) {
+ 		return false;
+ 	}
+-	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
++	/* These descriptive per-core FDT values do not enable AMP dispatch,
++	 * DVFS, idle, PSCI CPU_ON, or GIC redistributor bring-up. */
++	if (dizi) {
++		unsigned physical_core = cpu->phys_id >> 8;
++		IORegistryEntry::setProperty("DiziCoreCapacityDMIPSPerMHz", physical_core < 4u ? 0x400u : 0x799u, 32);
++		IORegistryEntry::setProperty("DiziPhysicalCore", physical_core, 32);
++		IORegistryEntry::setProperty("DiziClusterMetadataOptIn", experimental_clusters);
++	}
++	cpuName = OSSymbol::withCStringNoCopy(dizi ?
++	    ((cpu->phys_id >> 8) < 4u ? "Cortex-A55" : "Cortex-A78") : "Kryo 470");
+ 	if (cpuName == NULL) {
+ 		return false;
+ 	}
+@@ -128,8 +153,8 @@
+ 	const ml_topology_info_t *topology = ml_get_topology_info();
+ 	uint32_t requested = 1;
+ 	PE_parse_boot_argn("cpus", &requested, sizeof(requested));
+-	IOLog("SWEET CPU: requested=%u selected=%u (limit=%u)\n",
+-	    requested, topology->num_cpus, SWEET_SMP_MAX_CPUS);
++	IOLog("SWEET CPU: requested=%u selected=%u (limit=%u, topology clusters=%u; dizi multi-core UNVERIFIED)\n",
++	    requested, topology->num_cpus, SWEET_SMP_MAX_CPUS, topology->num_clusters);
+ 
+ 	uint64_t deadline;
+ 	nanoseconds_to_deadline(10 * NSEC_PER_SEC, &deadline);

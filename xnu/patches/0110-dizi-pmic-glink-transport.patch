@@ -1,0 +1,423 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -15,6 +15,8 @@
+ #include <kern/clock.h>
+ #include <kern/locks.h>
+ #include "DiziPmicTelemetry.h"
++#include "DiziPmicGlinkSched.h"
++#include "DiziPmicGlinkEndpoint.h"
+ /* bsd/dev/sweet_spmi.c */
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+@@ -25,7 +27,8 @@
+ static LCK_GRP_DECLARE(dizi_bc_lock_grp, "dizi-pmic-glink");
+ static LCK_MTX_DECLARE(dizi_bc_lock, &dizi_bc_lock_grp);
+ static struct dizi_bc_state dizi_bc_telemetry;
+-static bool dizi_bc_enabled;
++static struct dizi_pmic_sched dizi_bc_sched;
++static bool dizi_bc_enabled, dizi_bc_transport_opt_in;
+ 
+ static uint64_t
+ dizi_bc_now_ms(void)
+@@ -35,40 +38,111 @@
+     return nanoseconds / 1000000ULL;
+ }
+ 
++/* Legacy 0105 unsuffixed hook: a boolean is not evidence of a GLINK OPEN_ACK,
++ * charger PDR and local channel/SMEM ownership. It may only tear the link
++ * down. A new native backend must use the epoch-tagged API below. */
+ extern "C" void
+ dizi_pmic_glink_transport_state(bool link_up, bool exclusive_owned)
+ {
+     lck_mtx_lock(&dizi_bc_lock);
+-    if (dizi_bc_enabled)
+-        dizi_bc_link(&dizi_bc_telemetry, link_up, exclusive_owned);
++    if (!link_up || !exclusive_owned)
++        dizi_pmic_sched_close(&dizi_bc_sched, &dizi_bc_telemetry);
+     lck_mtx_unlock(&dizi_bc_lock);
+ }
+ 
+-/* The caller must send the returned request on the same owned GLINK channel
+- * and feed the reply. On transmit error it must call transport_state(false).
+- * No actual request is transmitted by 0105. */
++static bool
++dizi_bc_expected_channel(const char *s)
++{
++    static const char expected[] = "PMIC_RTR_ADSP_APPS";
++    if (!s) return false;
++    for (unsigned i = 0; i < sizeof(expected); i++) {
++        if (s[i] != expected[i]) return false;
++        if (expected[i] == 0) return true;
++    }
++    return false;
++}
++
++/* An eventual native Q6 remoteproc/SMEM/GLINK/rpmsg backend invokes this
++ * ONLY following verified ADSP PID2 startup, charger_pd UP, GLINK version
++ * negotiation, channel OPEN_ACK, exclusive ownership and drained stale RX.
++ * The epoch must increase for every true remote channel generation. FDT
++ * configuration alone is insufficient. No backend exists in this patch. */
++extern "C" bool
++dizi_pmic_glink_transport_open(uint64_t epoch, uint32_t evidence,
++    const char *channel, bool exclusive_owner)
++{
++    bool ok;
++    lck_mtx_lock(&dizi_bc_lock);
++    if (dizi_bc_enabled && dizi_bc_transport_opt_in &&
++        dizi_bc_expected_channel(channel)) {
++        ok = dizi_pmic_sched_open(&dizi_bc_sched, &dizi_bc_telemetry,
++            epoch, evidence, exclusive_owner);
++    } else {
++        dizi_pmic_sched_close(&dizi_bc_sched, &dizi_bc_telemetry);
++        ok = false;
++    }
++    lck_mtx_unlock(&dizi_bc_lock);
++    return ok;
++}
++
++/* The backend pulls one exact GET payload and must send it on the same
++ * verified channel, with its own send-vs-close exclusion. Send failures
++ * invalidate every sample via dizi_pmic_glink_transport_tx_failed(). */
++extern "C" bool
++dizi_pmic_glink_transport_next_get(uint64_t epoch, uint8_t out[24],
++    size_t *length)
++{
++    bool ok = false;
++    lck_mtx_lock(&dizi_bc_lock);
++    if (dizi_bc_enabled && dizi_bc_transport_opt_in)
++        ok = dizi_pmic_sched_next(&dizi_bc_sched, &dizi_bc_telemetry,
++            epoch, dizi_bc_now_ms(), out, length);
++    lck_mtx_unlock(&dizi_bc_lock);
++    return ok;
++}
++
++extern "C" bool
++dizi_pmic_glink_transport_receive_epoch(uint64_t epoch,
++    const uint8_t *bytes, size_t size)
++{
++    bool ok = false;
++    lck_mtx_lock(&dizi_bc_lock);
++    if (dizi_bc_enabled && dizi_bc_transport_opt_in)
++        ok = dizi_pmic_sched_receive(&dizi_bc_sched, &dizi_bc_telemetry,
++            epoch, bytes, size, dizi_bc_now_ms());
++    lck_mtx_unlock(&dizi_bc_lock);
++    return ok;
++}
++
++extern "C" void
++dizi_pmic_glink_transport_closed_epoch(uint64_t epoch)
++{
++    lck_mtx_lock(&dizi_bc_lock);
++    dizi_pmic_sched_tx_error(&dizi_bc_sched, &dizi_bc_telemetry, epoch);
++    lck_mtx_unlock(&dizi_bc_lock);
++}
++
++extern "C" void
++dizi_pmic_glink_transport_tx_failed(uint64_t epoch)
++{
++    dizi_pmic_glink_transport_closed_epoch(epoch);
++}
++
++/* Compatibility hooks cannot distinguish old RX from new channel epochs.
++ * They remain available as fail-closed stubs until an owned backend exists. */
+ extern "C" bool
+ dizi_pmic_glink_begin_get(unsigned slot, uint8_t out[24], size_t *size)
+ {
+-    bool ok = false;
+-    lck_mtx_lock(&dizi_bc_lock);
+-    if (dizi_bc_enabled)
+-        ok = dizi_bc_make_get(&dizi_bc_telemetry, slot, dizi_bc_now_ms(), out, size);
+-    lck_mtx_unlock(&dizi_bc_lock);
+-    return ok;
++    (void)slot; (void)out; (void)size;
++    return false;
+ }
+ 
+ extern "C" bool
+ dizi_pmic_glink_receive(const uint8_t *bytes, size_t size)
+ {
+-    bool ok = false;
+-    lck_mtx_lock(&dizi_bc_lock);
+-    if (dizi_bc_enabled)
+-        ok = dizi_bc_receive(&dizi_bc_telemetry, bytes, size, dizi_bc_now_ms());
+-    lck_mtx_unlock(&dizi_bc_lock);
+-    return ok;
+-}
+-
++    (void)bytes; (void)size;
++    return false;
++}
+ 
+ class SweetBattery : public IOPMPowerSource {
+ 	OSDeclareDefaultStructors(SweetBattery);
+@@ -264,8 +338,8 @@
+     struct dizi_bc_snapshot snapshot = {};
+     uint64_t now = dizi_bc_now_ms();
+     lck_mtx_lock(&dizi_bc_lock);
+-    bool valid = dizi_bc_enabled &&
+-        !dizi_bc_expire(&dizi_bc_telemetry, now) &&
++    bool valid = dizi_bc_enabled && dizi_bc_transport_opt_in &&
++        dizi_pmic_sched_check(&dizi_bc_sched, &dizi_bc_telemetry, now) &&
+         dizi_bc_snapshot(&dizi_bc_telemetry, now, &snapshot);
+     lck_mtx_unlock(&dizi_bc_lock);
+     putBool("DiziBatteryTelemetryValid", valid);
+@@ -376,15 +450,17 @@
+ 	if (!IOPMPowerSource::start(provider)) {
+ 		return false;
+ 	}
+-	int real = 0, dizi = 0, telemetry = 0;
++	int real = 0, dizi = 0, telemetry = 0, transport = 0;
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+ 	(void)PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
+ 	(void)PE_parse_boot_argn("dizibattery", &telemetry, sizeof(telemetry));
++	(void)PE_parse_boot_argn("dizipmictransport", &transport, sizeof(transport));
+ 	fDizi = dizi == 1;
+ 	if (fDizi) {
+ 	    lck_mtx_lock(&dizi_bc_lock);
+ 	    dizi_bc_enabled = telemetry == 1;
+-	    dizi_bc_link(&dizi_bc_telemetry, false, false);
++	    dizi_bc_transport_opt_in = telemetry == 1 && transport == 1;
++	    dizi_pmic_sched_close(&dizi_bc_sched, &dizi_bc_telemetry);
+ 	    lck_mtx_unlock(&dizi_bc_lock);
+ 	}
+ 	fReal = !fDizi && real == 1 && sweet_spmi_init() == 0;
+@@ -419,8 +495,8 @@
+ 	}
+     if (fDizi) {
+         lck_mtx_lock(&dizi_bc_lock);
+-        dizi_bc_enabled = false;
+-        dizi_bc_link(&dizi_bc_telemetry, false, false);
++        dizi_bc_enabled = dizi_bc_transport_opt_in = false;
++        dizi_pmic_sched_close(&dizi_bc_sched, &dizi_bc_telemetry);
+         lck_mtx_unlock(&dizi_bc_lock);
+     }
+ 	IOPMPowerSource::stop(provider);
+diff --git a/iokit/Kernel/arm/DiziPmicGlinkSched.h b/iokit/Kernel/arm/DiziPmicGlinkSched.h
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/DiziPmicGlinkSched.h
+@@ -0,0 +1,168 @@
++/*
++ * Dizi Qualcomm PMIC-GLINK request scheduler / verified channel handoff.
++ *
++ * This is deliberately ABOVE GLINK/rpmsg: no MMIO, SMEM allocation, remoteproc
++ * boot, interrupt, ring access, or power writes occur here. MiCode's Linux
++ * stack uses qcom_glink_smem -> qcom_glink_native -> rpmsg -> pmic_glink.
++ * The remote endpoint is ADSP PID 2 / PMIC_RTR_ADSP_APPS, with charger_pd
++ * service readiness and SSR/PDR notifications. The XNU port lacks that stack.
++ *
++ * Callers must serialize entry with the same mutex as dizi_bc_state. A
++ * prospective backend must quiesce sends during close, drain stale RX after
++ * SSR/PDR, and assign an increasing epoch only after fresh channel OPEN_ACK.
++ * Frames have no sequence/epoch on the wire: epoch tags below are LOCAL
++ * metadata, never a replacement for a genuine remote restart barrier.
++ */
++#ifndef DIZI_PMIC_GLINK_SCHED_H
++#define DIZI_PMIC_GLINK_SCHED_H
++
++#include "DiziPmicTelemetry.h"
++
++#define DIZI_PMIC_EV_ADSP_RUNNING      (1u << 0)
++#define DIZI_PMIC_EV_CHARGER_PD_UP     (1u << 1)
++#define DIZI_PMIC_EV_VERSION_ACK       (1u << 2)
++#define DIZI_PMIC_EV_CHANNEL_OPEN_ACK  (1u << 3)
++#define DIZI_PMIC_EV_EXCLUSIVE_OWNER   (1u << 4)
++#define DIZI_PMIC_EV_RX_DRAINED        (1u << 5)
++#define DIZI_PMIC_EV_ALL              ((1u << 6) - 1u)
++
++/* Query rate is lower than BC_FRESH_MS: 8 properties per ~1s plus 5s pause. */
++#define DIZI_PMIC_GET_SPACING_MS 100u
++#define DIZI_PMIC_ROUND_PAUSE_MS 5000u
++
++struct dizi_pmic_sched {
++    uint64_t max_epoch;  /* never reused across a lost link */
++    uint64_t active_epoch;
++    uint64_t next_due_ms;
++    uint64_t last_clock_ms;
++    uint32_t evidence;
++    uint8_t ready;
++    uint8_t in_flight;
++    uint8_t in_flight_slot;
++    uint8_t next_slot;
++};
++
++static inline uint64_t
++dizi_pmic_sched_after(uint64_t now, uint64_t interval)
++{
++    return UINT64_MAX - now < interval ? UINT64_MAX : now + interval;
++}
++
++/* Force all telemetry unknown, release outstanding transaction. */
++static inline void
++dizi_pmic_sched_close(struct dizi_pmic_sched *s, struct dizi_bc_state *bc)
++{
++    if (!s || !bc) return;
++    dizi_bc_link(bc, false, false);
++    s->ready = 0;
++    s->active_epoch = 0;
++    s->evidence = 0;
++    s->in_flight = 0;
++    s->in_flight_slot = 0;
++    s->next_slot = 0;
++    s->next_due_ms = 0;
++    s->last_clock_ms = 0;
++}
++
++/* Hardware/GLINK ownership cannot be inferred by this function. The backend
++ * provides evidence AFTER real IPCC/SMEM/GLINK + PDR verification; this API
++ * MUST NOT be called on a guessed FDT address or a mere firmware-running bit.
++ * On failure, even a previously healthy link is invalidated. */
++static inline bool
++dizi_pmic_sched_open(struct dizi_pmic_sched *s, struct dizi_bc_state *bc,
++    uint64_t epoch, uint32_t verified_evidence, bool exclusive_owner)
++{
++    if (!s || !bc) return false;
++    if (!exclusive_owner || verified_evidence != DIZI_PMIC_EV_ALL ||
++        !epoch || epoch <= s->max_epoch || s->ready) {
++        dizi_pmic_sched_close(s, bc);
++        return false;
++    }
++    dizi_pmic_sched_close(s, bc);
++    s->max_epoch = s->active_epoch = epoch;
++    s->evidence = verified_evidence;
++    s->ready = 1;
++    dizi_bc_link(bc, true, true);
++    return true;
++}
++
++static inline bool
++dizi_pmic_sched_ready(const struct dizi_pmic_sched *s,
++    const struct dizi_bc_state *bc, uint64_t epoch)
++{
++    return s && bc && s->ready && bc->online && bc->owned &&
++        s->evidence == DIZI_PMIC_EV_ALL && epoch &&
++        s->active_epoch == epoch;
++}
++
++/* Check one outstanding GET's timeout BEFORE any access to its response.
++ * A timeout requires an actual fresh GLINK/PDR epoch, never an immediate
++ * retry against the same channel with an indistinguishable late response. */
++static inline bool
++dizi_pmic_sched_check(struct dizi_pmic_sched *s, struct dizi_bc_state *bc,
++    uint64_t now_ms)
++{
++    if (!s || !bc || !s->ready) return false;
++    if ((s->last_clock_ms && now_ms < s->last_clock_ms) ||
++        !bc->online || !bc->owned ||
++        (s->in_flight && !bc->pending) ||
++        dizi_bc_expire(bc, now_ms)) {
++        dizi_pmic_sched_close(s, bc);
++        return false;
++    }
++    s->last_clock_ms = now_ms;
++    return true;
++}
++
++/* Plan EXACTLY one 0105 24-byte GET. The caller must transmit it with the
++ * verified endpoint, check its epoch AGAIN under the endpoint's send/close
++ * serialization lock, and report any send error via dizi_pmic_sched_tx_error.
++ * No request is sent by this function. */
++static inline bool
++dizi_pmic_sched_next(struct dizi_pmic_sched *s, struct dizi_bc_state *bc,
++    uint64_t epoch, uint64_t now_ms, uint8_t out[24], size_t *out_len)
++{
++    if (!dizi_pmic_sched_ready(s, bc, epoch) ||
++        !dizi_pmic_sched_check(s, bc, now_ms) || s->in_flight ||
++        now_ms < s->next_due_ms || !out || !out_len)
++        return false;
++    if (!dizi_bc_make_get(bc, s->next_slot, now_ms, out, out_len))
++        return false;
++    s->in_flight = 1;
++    s->in_flight_slot = s->next_slot;
++    return *out_len == 24;
++}
++
++static inline void
++dizi_pmic_sched_tx_error(struct dizi_pmic_sched *s,
++    struct dizi_bc_state *bc, uint64_t epoch)
++{
++    if (dizi_pmic_sched_ready(s, bc, epoch))
++        dizi_pmic_sched_close(s, bc);
++}
++
++/* Deliver only a complete GLINK channel payload, never SMEM ring bytes.
++ * All owner/opcode/property/value checking stays in 0105's parser.
++ * Notifications may arrive mid-request; they do not complete the request.
++ * The endpoint MUST attach its own true local epoch to every received frame. */
++static inline bool
++dizi_pmic_sched_receive(struct dizi_pmic_sched *s, struct dizi_bc_state *bc,
++    uint64_t epoch, const uint8_t *data, size_t len, uint64_t now_ms)
++{
++    if (!dizi_pmic_sched_ready(s, bc, epoch) ||
++        !dizi_pmic_sched_check(s, bc, now_ms) || !data ||
++        len < 12 || len > 24)
++        return false;
++    bool accepted = dizi_bc_receive(bc, data, len, now_ms);
++    if (s->in_flight && !bc->pending) {
++        /* A valid reply OR a rejected/failed property clears the slot.
++         * Wrong opcodes leave pending and ultimately time out. */
++        s->in_flight = 0;
++        s->next_slot = (uint8_t)((s->in_flight_slot + 1u) % DIZI_BC_COUNT);
++        s->next_due_ms = dizi_pmic_sched_after(now_ms,
++            s->next_slot ? DIZI_PMIC_GET_SPACING_MS : DIZI_PMIC_ROUND_PAUSE_MS);
++    }
++    return accepted;
++}
++
++#endif /* DIZI_PMIC_GLINK_SCHED_H */
+diff --git a/iokit/Kernel/arm/DiziPmicGlinkEndpoint.h b/iokit/Kernel/arm/DiziPmicGlinkEndpoint.h
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/DiziPmicGlinkEndpoint.h
+@@ -0,0 +1,51 @@
++/*
++ * Native XNU PMIC-GLINK endpoint API for a FUTURE Qualcomm ADSP backend.
++ *
++ * This file does NOT activate SMEM, Q6, GLINK, an interrupt, or a charger.
++ * A backend must first implement the FDT-described ADSP PID2 SMEM GLINK
++ * link, negotiate versions and an OPEN_ACK for PMIC_RTR_ADSP_APPS, check
++ * msm/adsp/charger_pd, obtain exclusive local channel/ring ownership, and
++ * drain prior-epoch responses. All six DIZI_PMIC_EV_* bits defined in
++ * DiziPmicGlinkSched.h are proofs supplied by that backend, not defaults.
++ *
++ * All calls execute at thread/workloop context, not in a hard IRQ.
++ * The backend serializes send+close for its channel and tags each RX with
++ * the epoch of the actual channel. Wire messages have no sequence number.
++ */
++#ifndef DIZI_PMIC_GLINK_ENDPOINT_H
++#define DIZI_PMIC_GLINK_ENDPOINT_H
++
++#include <stdint.h>
++#include <stddef.h>
++#include <stdbool.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Requires boot flags dizihw=1 dizibattery=1 dizipmictransport=1 AND
++ * channel name "PMIC_RTR_ADSP_APPS" AND exact DIZI_PMIC_EV_ALL evidence.
++ * A previously used local epoch cannot be reopened. */
++bool dizi_pmic_glink_transport_open(uint64_t epoch, uint32_t evidence,
++    const char *channel, bool exclusive_owner);
++
++/* Return false if closed, not yet due, or one GET is already outstanding.
++ * On true, exactly 24 bytes are ready for a SINGLE GLINK rpmsg TX operation.
++ * No send is performed by XNU SweetBattery. */
++bool dizi_pmic_glink_transport_next_get(uint64_t epoch,
++    uint8_t out[24], size_t *length);
++
++/* Entire validated GLINK channel payload, never raw ring memory.
++ * Return true only for a validated response or recognized notification. */
++bool dizi_pmic_glink_transport_receive_epoch(uint64_t epoch,
++    const uint8_t *bytes, size_t size);
++
++/* Link removal, SSR/PDR down and TX error all invalidate telemetry.
++ * An outdated epoch cannot close a newer live channel. */
++void dizi_pmic_glink_transport_closed_epoch(uint64_t epoch);
++void dizi_pmic_glink_transport_tx_failed(uint64_t epoch);
++
++#ifdef __cplusplus
++}
++#endif
++#endif /* DIZI_PMIC_GLINK_ENDPOINT_H */

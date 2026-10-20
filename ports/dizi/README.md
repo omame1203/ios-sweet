@@ -47,3 +47,28 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -pedantic \
 The host test verifies exact virtual SRAM reconstruction and injected
 transport failure, in addition to header corruption, version, marker,
 bounds and overflow cases. It does not touch the tablet.
+
+## Additional offline dizi platform code
+
+`se9_clock.{c,h}` contains a portable Qualcomm QUPv3 SE9 GCC/TLMM clock
+and interrupt configuration **planner**, with fake-MMIO tests in
+`se9_clock_test.c`. XNU patch 0108 mirrors this planner but intentionally
+hard-disables plan publication, since GPIO/GCC/IRQ and hypervisor ownership
+have not been proven. Its XNU bridge has no physical MMIO backend. Run
+`python3 tests/test-dizi-se9-xnu.py` for the mirror, ASan/UBSan and ARM64
+translation-unit checks.
+
+`pmic_glink_sched.h` is an offline, upper-layer PMIC-GLINK request/lifecycle
+scheduler shared with XNU patch 0110. It requires a verified real ADSP
+remote-channel generation before allowing GET transactions and never reads
+physical battery values by itself. No native SMEM/IPCC/GLINK/rpmsg endpoint
+has been attached. Run `python3 tests/test-dizi-pmic-sched-0110.py` for
+host/source checks; its tracked identity-free fixture also supports a fresh
+clone without vendor dumps or private device data.
+
+`ufs_gpt_bounds.h` and `ufs_gpt_bounds_test.c` implement source-identical
+integer/extent checks used by XNU patch 0111 to protect GPT table DMA,
+READ/WRITE(10) command range, and signed BSD block offsets in the polled
+UFS root driver. The code performs **no** device access. Run
+`python3 tests/test-dizi-ufs-gpt.py` to test the actual helper with
+ASan/UBSan and verify it matches the XNU patch byte-for-byte.

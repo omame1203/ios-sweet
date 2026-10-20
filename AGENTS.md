@@ -13,4 +13,11 @@
   into the existing `userdata` partition (no GPT changes). Keep bootloaders,
   recovery, modem, persist and the backups intact, and confirm each
   destructive step with the user before running it.
+- **POCO Pad (`dizi`) override, 2026-10-21:** the user's most recent explicit
+  instruction forbids temporary boots as well. Work ONLY in source files,
+  simulated/host tests, ARM64 cross-compiles and GitHub Actions builds. Do
+  not run adb, fastboot, any device operation, reboot or flash, even if older
+  notes describe previously approved diagnostic boots or userdata writes.
+  Software-only success is not hardware validation. Preserve all existing
+  dizi images and original Android/firmware assets.
 - Keep device dumps, serial numbers and downloaded Apple artifacts out of git.

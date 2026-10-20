@@ -58,6 +58,64 @@ number of touchscreen-specific source files.
 
 ## Engineering order
 
+### Additional non-device XNU integration (0107–0111)
+
+* `0107`: optional dizi 4-A55/4-A78 ADT/XNU topology metadata. The
+  tracked, identity-free `tests/fixtures/dizi-cpu-only.dts` permits offline
+  reproduction of the source-observed FDT CPU mapping. No secondary PSCI,
+  GICR or heterogeneous energy policy is enabled by default.
+* `0108`: XNU compiles an offline SE9 clock/GCC/TLMM/IRQ54 planner plus a
+  hard-disabled bridge. Host fake register model passes 143 assertions;
+  no verified exclusive clock or hypervisor ownership, live GENI SPI,
+  clock writes, or GPI DMA have been implemented.
+* `0109`: framebuffer OFF/ON generation checks now protect the *pixel loop*
+  as well as the later LCD bookkeeping. A per-row `fLock` prevents a stale
+  OFF tick from painting over an accepted ON. Real backlight and panel
+  sequencing are still missing.
+* `0110`: PMIC-GLINK software scheduler requires verified ADSP and charger
+  service handoff, local endpoint epoch and positive ownership evidence;
+  pre-existing legacy untagged hooks cannot claim a valid battery link.
+  Transport details (SMEM, IPCC, remoteproc, GLINK native/rpmsg, SSR/PDR)
+  have not been implemented on XNU, so battery/thermal readings remain
+  unverified.
+* `0111`: polled UFS root's GPT table, 32-bit SCSI LBA and signed BSD block
+  arithmetic are bounds-checked by portable helpers; test covers malformed
+  lengths/ranges. This does **not** add a cold UFS PHY startup, asynchronous
+  request queue, or suspend/reset recovery.
+
+The above changes were applied to the archived full-XNU 0106 buildtree;
+their C translation units produced ARM64 Mach-O objects with recorded
+Apple compiler flags, while affected C++ sources passed syntax-only
+compatibility checks. A separate macOS Actions full kernel link for the
+expanded patchset must be verified before claiming new build success.
+No device actions occurred during this integration.
+
+### Full XNU build verification (2026-10-21, no tablet access)
+
+The macOS GitHub Actions full XNU build for patches 0101–0106 succeeded:
+run `39465604101`, commit `71a2b4e`, macOS-14,
+`MACHINE_CONFIG=SWEET`, `DEVELOPMENT`. Its `xnu-kernel` artifact was
+downloaded to ignored `xnu/out-0106/`, SHA256SUMS-verified, and confirmed
+as 17,266,272-byte ARM64 Mach-O (`34537ec17ff2457f0bae9e9cdc9c1011b2fd991fc3f63b4ccb63534a5635075b`).
+This is a kernel compile/link milestone **only**, not evidence that any
+unverified physical peripheral is working. Existing restrictions on all
+device actions, including temporary boot, remain in force.
+
+Source-only `0107` adds *optional* dizi 4x A55 / 4x A78 topology metadata
+and verified ADT generation, while preserving the default one-core boot.
+`dizismpclusters=1` and a separately generated experimental ADT are both
+required in addition to `cpus>1`; neither change is selected for the known
+GUI build. PSCI secondary bring-up/GIC redistributors and XNU scheduler
+heterogeneity are still unverified; its full macOS link is pending.
+
+The Apple `IONetworkingFamily-166` source study (ignored
+`research/ionet-0109/REPORT.md`) establishes why adding a superficial
+IOEthernetController is unsafe: legacy `sweet_usb.c` already owns the BSD
+`ue0` ifnet, while Apple's IONetworkInterface owns and attaches its own
+private ifnet, and patch 0098's fake IONetworkController class would collide
+with the genuine ABI. Correct integration requires a single-interface
+migration and an actual compatible family, not a cosmetic class rename.
+
 ### Offline source implementation checkpoint (2026-10-21)
 
 After this audit, XNU patches `0101`–`0106` added testable pieces for

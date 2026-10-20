@@ -1,0 +1,395 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -118,4 +118,6 @@
+ bsd/dev/monotonic.c optional monotonic
++bsd/dev/se9_clock.c		standard
++bsd/dev/dizi_se9_xnu.c		standard
+ bsd/dev/dev_perfmon.c optional config_perfmon
+ 
+ bsd/libkern/crc32.c			standard
+diff --git a/bsd/dev/se9_clock.h b/bsd/dev/se9_clock.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/se9_clock.h
+@@ -0,0 +1,98 @@
++/* SPDX-License-Identifier: MIT
++ * Offline-only SE9 root clock + TLMM 10..13 / IRQ54 register plan.
++ * This API NEVER performs MMIO writes; ownership must be proven separately.
++ */
++#ifndef DIZI_SE9_CLOCK_H
++#define DIZI_SE9_CLOCK_H
++#include <stdint.h>
++#include <stddef.h>
++#include <stdbool.h>
++
++#define SE9_GCC_BASE        UINT64_C(0x00100000)
++#define SE9_TLMM_BASE       UINT64_C(0x0f000000)
++#define SE9_GPIO_BASE       (SE9_TLMM_BASE + UINT64_C(0x100000))
++#define SE9_GCC_VOTE        (SE9_GCC_BASE + UINT64_C(0x62008))
++#define SE9_GCC_RCG_CMD     (SE9_GCC_BASE + UINT64_C(0x283b0))
++#define SE9_GCC_RCG_CFG     (SE9_GCC_RCG_CMD + 4u)
++#define SE9_GCC_SE_CBCR     (SE9_GCC_BASE + UINT64_C(0x283a8))
++#define SE9_GCC_M_AHB_CBCR  (SE9_GCC_BASE + UINT64_C(0x28004))
++#define SE9_GCC_S_AHB_CBCR  (SE9_GCC_BASE + UINT64_C(0x28008))
++#define SE9_GPIO_CTL(n)     (SE9_GPIO_BASE + (uint64_t)(n) * 0x1000u)
++#define SE9_GPIO_IO(n)      (SE9_GPIO_CTL(n) + 4u)
++#define SE9_GPIO_INTR(n)    (SE9_GPIO_CTL(n) + 8u)
++#define SE9_GPIO_INTR_ST(n) (SE9_GPIO_CTL(n) + 12u)
++#define SE9_IO_MAX 16u
++#define SE9_PLAN_MAX 18u
++#define SE9_XO_HZ 19200000u
++#define SE9_NVT_MAX_HZ 9600000u
++#define SE9_ID_GPIO54 54u
++
++enum se9_result {
++    SE9_OK = 0, SE9_BAD_ARG = -1, SE9_NO_OWNER = -2,
++    SE9_BAD_STATE = -3, SE9_STALE = -4, SE9_INCOMPLETE = -5
++};
++/* These are independent EXTERNAL ATTESTATIONS, not inferred from register
++ * values, probe logs, FDT, a boot argument, or another device's consent. */
++struct se9_ownership {
++    bool gcc_exclusive;
++    bool rcg_exclusive;
++    bool wrap1_m_ahb_vote;
++    bool wrap1_s_ahb_vote;
++    bool se9_branch_vote;
++    bool tlmm_pins10_13_exclusive;
++    bool gpio54_exclusive;
++    bool irq54_route_exclusive;
++    bool spi_controller_idle;
++    bool chip_select_idle;
++    bool xo_19200000_verified;
++    bool voltage_corners_approved;
++    bool interrupt_handler_ready;
++    bool no_concurrent_clients;
++};
++struct se9_reg {
++    uint64_t pa;
++    uint32_t value;
++};
++struct se9_snapshot {
++    struct se9_reg regs[SE9_IO_MAX];
++    unsigned count;
++};
++/* Operation plan is DATA ONLY: never writes or invokes a write callback.
++ * RMW must compare expected masked read before any hypothetical update;
++ * WAIT is a bounded hardware status poll to be implemented by a future
++ * audited backend. Values are absolute physical addresses, not pointers. */
++enum se9_op_kind { SE9_RMW = 1, SE9_WAIT_BITS = 2 };
++struct se9_op {
++    enum se9_op_kind kind;
++    uint64_t pa;
++    uint32_t mask;
++    uint32_t value;
++    uint32_t expect_mask; /* checked just before this operation */
++    uint32_t expect_value;
++    uint32_t max_polls; /* only WAIT_BITS, NEVER unbounded */
++};
++struct se9_plan {
++    struct se9_snapshot source;
++    struct se9_op ops[SE9_PLAN_MAX];
++    unsigned count;
++    uint32_t source_hz;
++    uint32_t spi_hz_max;
++    bool irq_armed_in_plan;
++};
++typedef int (*se9_read32)(void *ctx, uint64_t pa, uint32_t *value);
++
++/* RO snapshot probes only this fixed GCC/TLMM allowlist. */
++int se9_take_snapshot(se9_read32 read32, void *ctx, struct se9_snapshot *out);
++/* Requires independent ALL-resource attestation; no registry writes. */
++int se9_make_plan(const struct se9_snapshot *snap,
++                  const struct se9_ownership *auth, bool arm_irq54,
++                  struct se9_plan *out);
++/* Check that all source registers are unchanged since the plan was made.
++ * Does NOT itself grant ownership or perform any hardware actions. */
++int se9_verify_unchanged(const struct se9_plan *plan,
++                         se9_read32 read32, void *ctx);
++/* Model of plan RMW/WAIT on a caller-owned fake in-memory register table;
++ * has NO hardware callback, MMIO pointer, or device address dereference. */
++int se9_simulate(const struct se9_plan *plan, struct se9_snapshot *fake,
++                 unsigned *step_completed);
++#endif
+diff --git a/bsd/dev/se9_clock.c b/bsd/dev/se9_clock.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/se9_clock.c
+@@ -0,0 +1,230 @@
++#define SE9_XNU_PUBLISH_PLAN 0 /* hard-disabled XNU policy */
++/* SPDX-License-Identifier: MIT
++ * Pure software register planner, not a GPIO, GCC, IRQ or GENI driver.
++ * Source: Xiaomi parrot gcc-parrot.c: gcc_qupv3_wrap1_s3_clk_src at 0x283b0,
++ * parent-map0 XO selector0, ftbl_gcc_qupv3_wrap0_s2_clk_src XO 19.2 MHz,
++ * S3 branch halt0x283a8 voted GCC+0x62008 bit25, wrap1 m/s-ahb bits20/21.
++ * pinctrl-parrot.h: REG_BASE 0x100000, REG_SIZE 0x1000,
++ * gpio10..13 mux=1, GPIO54 interrupt bits at +8 (status+12).
++ * live.dts: spi@a8c000 se-clk 0x54, m-ahb 0x5d, s-ahb 0x5e;
++ * gpio10 MISO, gpio11 MOSI, gpio12 SCLK, gpio13 CS; NVT IRQ54 falling;
++ * probe02: RCG 0x80000000/0x00100000, SE CBCR 0x80004220,
++ * GPIO10..12 cfg=1, GPIO13 cfg=0x2c3/io=3, GPIO54 cfg=0.
++ * These facts DO NOT establish register ownership or authorize writes.
++ */
++#include "se9_clock.h"
++#include <string.h>
++
++/* The kernel mirror is built with SE9_XNU_PUBLISH_PLAN=0. This disables
++ * even direct calls to se9_make_plan; no caller-supplied claimed ownership
++ * can switch that mode on. Offline portable host tests use the default 1. */
++#ifndef SE9_XNU_PUBLISH_PLAN
++#define SE9_XNU_PUBLISH_PLAN 1
++#endif
++
++/* Include IO registers even when a plan does not mutate them, to prove
++ * the original output/IRQ state has not changed before future integration. */
++static const uint64_t allowlist[] = {
++    SE9_GCC_VOTE, SE9_GCC_RCG_CMD, SE9_GCC_RCG_CFG,
++    SE9_GCC_SE_CBCR, SE9_GCC_M_AHB_CBCR, SE9_GCC_S_AHB_CBCR,
++    SE9_GPIO_CTL(10), SE9_GPIO_IO(10), SE9_GPIO_CTL(11),
++    SE9_GPIO_CTL(12), SE9_GPIO_CTL(13), SE9_GPIO_IO(13),
++    SE9_GPIO_CTL(54), SE9_GPIO_IO(54), SE9_GPIO_INTR(54),
++    SE9_GPIO_INTR_ST(54)
++};
++
++static bool all_owned(const struct se9_ownership *a, bool irq)
++{
++    return a && a->gcc_exclusive && a->rcg_exclusive &&
++           a->wrap1_m_ahb_vote && a->wrap1_s_ahb_vote &&
++           a->se9_branch_vote && a->tlmm_pins10_13_exclusive &&
++           a->gpio54_exclusive && a->irq54_route_exclusive &&
++           a->spi_controller_idle && a->chip_select_idle &&
++           a->xo_19200000_verified && a->voltage_corners_approved &&
++           a->no_concurrent_clients && (!irq || a->interrupt_handler_ready);
++}
++
++static bool canonical_snapshot(const struct se9_snapshot *s)
++{
++    if (!s || s->count != SE9_IO_MAX) return false;
++    for (unsigned i = 0; i < SE9_IO_MAX; ++i)
++        if (s->regs[i].pa != allowlist[i]) return false;
++    return true;
++}
++
++static const struct se9_reg *lookup(const struct se9_snapshot *s, uint64_t pa)
++{
++    if (!canonical_snapshot(s)) return NULL;
++    for (unsigned i = 0; i < s->count; ++i)
++        if (s->regs[i].pa == pa) return &s->regs[i];
++    return NULL;
++}
++
++int se9_take_snapshot(se9_read32 read32, void *ctx, struct se9_snapshot *out)
++{
++    if (!read32 || !out) return SE9_BAD_ARG;
++    memset(out, 0, sizeof(*out));
++    for (unsigned i = 0; i < SE9_IO_MAX; ++i) {
++        uint32_t v = 0;
++        if (read32(ctx, allowlist[i], &v)) {
++            memset(out, 0, sizeof(*out));
++            return SE9_INCOMPLETE;
++        }
++        out->regs[i].pa = allowlist[i];
++        out->regs[i].value = v;
++        ++out->count;
++    }
++    return SE9_OK;
++}
++
++static int add(struct se9_plan *p, enum se9_op_kind kind, uint64_t pa,
++               uint32_t mask, uint32_t val, uint32_t expected_mask,
++               uint32_t expected_value, uint32_t polls)
++{
++    if (p->count >= SE9_PLAN_MAX) return SE9_INCOMPLETE;
++    p->ops[p->count++] = (struct se9_op){
++        kind, pa, mask, val, expected_mask, expected_value, polls
++    };
++    return SE9_OK;
++}
++
++int se9_make_plan(const struct se9_snapshot *snap,
++                  const struct se9_ownership *auth, bool arm_irq54,
++                  struct se9_plan *out)
++{
++    if (!out) return SE9_BAD_ARG;
++    memset(out, 0, sizeof(*out));
++    if (!snap) return SE9_BAD_ARG;
++#if !SE9_XNU_PUBLISH_PLAN
++    (void)auth;
++    (void)arm_irq54;
++    return SE9_NO_OWNER;
++#endif
++    if (!all_owned(auth, arm_irq54)) return SE9_NO_OWNER;
++    if (!canonical_snapshot(snap)) return SE9_INCOMPLETE;
++    /* RCG is off and S3 is halted; refuse reparenting a running root.
++     * Also refuse existing votes for our bit: can't infer their owner. */
++    const struct se9_reg *v = lookup(snap, SE9_GCC_VOTE);
++    const struct se9_reg *cmd = lookup(snap, SE9_GCC_RCG_CMD);
++    const struct se9_reg *cfg = lookup(snap, SE9_GCC_RCG_CFG);
++    const struct se9_reg *br = lookup(snap, SE9_GCC_SE_CBCR);
++    const struct se9_reg *m = lookup(snap, SE9_GCC_M_AHB_CBCR);
++    const struct se9_reg *s = lookup(snap, SE9_GCC_S_AHB_CBCR);
++    const struct se9_reg *cs = lookup(snap, SE9_GPIO_CTL(13));
++    const struct se9_reg *csio = lookup(snap, SE9_GPIO_IO(13));
++    const struct se9_reg *intctl = lookup(snap, SE9_GPIO_CTL(54));
++    const struct se9_reg *intcfg = lookup(snap, SE9_GPIO_INTR(54));
++    const struct se9_reg *intsts = lookup(snap, SE9_GPIO_INTR_ST(54));
++    if (!v || !cmd || !cfg || !br || !m || !s || !cs || !csio ||
++        !intctl || !intcfg || !intsts) return SE9_INCOMPLETE;
++    const uint32_t votes = (1u << 20) | (1u << 21) | (1u << 25);
++    if ((v->value & votes) || !(cmd->value & (1u << 31)) ||
++        (cmd->value & 3u) || !(br->value & (1u << 31)) ||
++        (m->value & (1u << 31)) || (s->value & (1u << 31)) ||
++        (cfg->value & (1u << 12)) ||
++        /* GPIO13 is a currently held-high GPIO output in probe02;
++         * skip if already claimed mux1 or CS level isn't known inactive. */
++        ((cs->value >> 2) & 0xfu) != 0 || !(cs->value & (1u << 9)) ||
++        !(csio->value & 2u) ||
++        ((intctl->value >> 2) & 0xfu) || (intctl->value & (1u << 9)) ||
++        (intcfg->value & 1u) || (intsts->value & 1u))
++        return SE9_BAD_STATE;
++    for (unsigned i = 10; i <= 13; ++i) {
++        const struct se9_reg *g = lookup(snap, SE9_GPIO_CTL(i));
++        if (!g || ((g->value >> 2) & 0xfu) != 0 ||
++            (g->value & (1u << 11))) return SE9_BAD_STATE;
++    }
++    /* No new clock controller voltage/PLL selection: XO is a verified
++     * independent 19.2 MHz parent. SPI <=9.6MHz needs GENI internal /2;
++     * that GENI divider is intentionally NOT set by this planner. */
++    out->source = *snap;
++    out->source_hz = SE9_XO_HZ;
++    out->spi_hz_max = SE9_NVT_MAX_HZ;
++    out->irq_armed_in_plan = arm_irq54;
++    /* 1: get wrapper buses active, 2: configure idle RCG source+HID=1
++     * (XO 19.2MHz at /1, parent0), 3: request update, 4: bounded wait,
++     * 5: vote SE clock, 6: bounded halt-status check, 7: pinmux, 8: IRQ. */
++    (void)add(out, SE9_RMW, SE9_GCC_VOTE, (1u<<20)|(1u<<21),
++              (1u<<20)|(1u<<21), votes, 0, 0);
++    const uint32_t rcgmask = 0x371fu; /* MODE[13:12], SRC[10:8], HID[4:0] */
++    (void)add(out, SE9_RMW, SE9_GCC_RCG_CFG, rcgmask, 1u,
++              rcgmask, cfg->value & rcgmask, 0);
++    (void)add(out, SE9_RMW, SE9_GCC_RCG_CMD, 1u, 1u, 3u, 0, 0);
++    (void)add(out, SE9_WAIT_BITS, SE9_GCC_RCG_CMD, 1u, 0, 0, 0, 500u);
++    (void)add(out, SE9_RMW, SE9_GCC_VOTE, (1u<<25), 1u<<25,
++              1u<<25, 0, 0);
++    (void)add(out, SE9_WAIT_BITS, SE9_GCC_SE_CBCR,
++              1u<<31, 0, 0, 0, 500u);
++    /* pinmux=1, pull disabled, 6mA drive=>drive code 2, OE=0:
++     * mask = bits[9:0], value=0x84. Keep egpio bits unmodified. */
++    for (unsigned i = 10; i <= 13; ++i) {
++        const struct se9_reg *g = lookup(snap, SE9_GPIO_CTL(i));
++        (void)add(out, SE9_RMW, g->pa, 0x3ffu, 0x84u,
++                  0x3ffu, g->value & 0x3ffu, 0);
++    }
++    /* GPIO54: mux0, input. Preserve existing pull and drive strength:
++     * neither FDT gpio flags nor probe02 proves an electrical pull-up. */
++    const uint32_t irqpin_mask = (0xfu << 2) | (1u << 9);
++    (void)add(out, SE9_RMW, SE9_GPIO_CTL(54), irqpin_mask, 0,
++              irqpin_mask, intctl->value & irqpin_mask, 0);
++    /* falling-edge: detection01 at [3:2], polarity0 at bit1;
++     * raw-status enable bit4; target KPSS=3 at [7:5]. Never ACK. */
++    const uint32_t irqmask = 0xffu; /* bits[7:0] */
++    const uint32_t irqval = (3u << 5) | (1u << 4) | (1u << 2) |
++                            (arm_irq54 ? 1u : 0u);
++    (void)add(out, SE9_RMW, SE9_GPIO_INTR(54), irqmask, irqval,
++              irqmask, intcfg->value & irqmask, 0);
++    return SE9_OK;
++}
++
++int se9_verify_unchanged(const struct se9_plan *plan,
++                         se9_read32 read32, void *ctx)
++{
++    if (!plan || !read32 || !canonical_snapshot(&plan->source) ||
++        !plan->count || plan->count > SE9_PLAN_MAX) return SE9_BAD_ARG;
++    for (unsigned i = 0; i < SE9_IO_MAX; ++i) {
++        uint32_t got;
++        if (plan->source.regs[i].pa != allowlist[i] ||
++            read32(ctx, allowlist[i], &got)) return SE9_INCOMPLETE;
++        if (got != plan->source.regs[i].value) return SE9_STALE;
++    }
++    return SE9_OK;
++}
++
++/* This is deliberately a fake-only interpreter; no arbitrary reader or
++ * writer callback can be passed to it. Tests model hardware clearing CMD
++ * UPDATE and deasserting CBCR.HALT after a vote, never a real device. */
++int se9_simulate(const struct se9_plan *plan, struct se9_snapshot *fake,
++                 unsigned *completed)
++{
++    if (completed) *completed = 0;
++    if (!plan || !fake || !completed || !plan->count ||
++        plan->count > SE9_PLAN_MAX || !canonical_snapshot(fake) ||
++        !canonical_snapshot(&plan->source))
++        return SE9_BAD_ARG;
++    for (unsigned i = 0; i < plan->count; ++i) {
++        const struct se9_op *op = &plan->ops[i];
++        struct se9_reg *reg = NULL;
++        for (unsigned j = 0; j < fake->count; ++j)
++            if (fake->regs[j].pa == op->pa) { reg = &fake->regs[j]; break; }
++        if (!reg) return SE9_INCOMPLETE;
++        if (op->kind == SE9_RMW) {
++            if ((reg->value & op->expect_mask) != op->expect_value)
++                return SE9_STALE;
++            reg->value = (reg->value & ~op->mask) | (op->value & op->mask);
++            /* emulate bounded GCC hardware ACK and voted branch activity */
++            if (op->pa == SE9_GCC_RCG_CMD && (op->value & 1u))
++                reg->value &= ~1u;
++            if (op->pa == SE9_GCC_VOTE && (op->value & (1u<<25))) {
++                for (unsigned j = 0; j < fake->count; ++j)
++                    if (fake->regs[j].pa == SE9_GCC_SE_CBCR)
++                        fake->regs[j].value &= ~(1u<<31);
++            }
++        } else if (op->kind == SE9_WAIT_BITS) {
++            if (!op->max_polls || op->max_polls > 500u ||
++                (reg->value & op->mask) != op->value) return SE9_BAD_STATE;
++        } else return SE9_BAD_ARG;
++        ++*completed;
++    }
++    return SE9_OK;
++}
+diff --git a/bsd/dev/dizi_se9_xnu.h b/bsd/dev/dizi_se9_xnu.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/dizi_se9_xnu.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: MIT
++ * Native XNU bridge: no MMIO access or live activation; hard-disabled.
++ * Pure software model is in bsd/dev/se9_clock.{c,h}. */
++#ifndef DIZI_SE9_XNU_H
++#define DIZI_SE9_XNU_H
++#include "se9_clock.h"
++/* Never infer ownership from Android/Linux probe logs or FDT.
++ * A future driver must independently implement an audited hardware owner. */
++int dizi_se9_xnu_plan(const struct se9_snapshot *snapshot,
++                      struct se9_plan *plan);
++int dizi_se9_xnu_enabled(void);
++#endif
+diff --git a/bsd/dev/dizi_se9_xnu.c b/bsd/dev/dizi_se9_xnu.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/dizi_se9_xnu.c
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: MIT
++ * Default-disabled XNU software bridge for dizi QUP SE9.
++ * Sources (information, not permissions):
++ * research/ruan-source/gcc-parrot.c: Qualcomm GCC parrot s3 RCG/SE branch;
++ * research/xiaomi-ruan/drivers/pinctrl/qcom/pinctrl-parrot.h:
++ *     per-pin TLMM offsets/mux/IRQ bits;
++ * backup/dizi/live.dts: gpio10..13 SPI, GPIO54 touchscreen IRQ;
++ * logs/dizi-input-probe02.txt: preexisting stopped RCG, gpio13 output.
++ * Nothing below reads or writes physical registers, votes, or IRqs.
++ */
++#include "dizi_se9_xnu.h"
++
++int dizi_se9_xnu_enabled(void)
++{
++    return 0; /* no platform/hypervisor ownership handoff */
++}
++
++int dizi_se9_xnu_plan(const struct se9_snapshot *snapshot,
++                      struct se9_plan *plan)
++{
++    /* No fabricated ownership. Even a forged caller cannot bypass the
++     * compile-time SE9_XNU_PUBLISH_PLAN=0 gate in se9_clock.c. */
++    static const struct se9_ownership never_authorized = {0};
++    return se9_make_plan(snapshot, &never_authorized, false, plan);
++}

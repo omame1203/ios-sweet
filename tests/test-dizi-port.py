@@ -38,10 +38,15 @@ def run(args):
 
 def main():
     check_firmware_mirror()
+    run([sys.executable, 'tests/test-dizi-cpu-topology.py'])
     run([sys.executable, 'tools/test-dizi-rtc.py'])
     run([sys.executable, 'tests/test-dizi-smmu-dma.py'])
+    run([sys.executable, 'tests/test-dizi-se9-xnu.py'])
+    run([sys.executable, 'tests/test-dizi-ufs-gpt.py'])
     run([sys.executable, 'tests/test-dizi-lcd.py'])
+    run([sys.executable, 'tests/test-dizi-lcd-generation-race.py'])
     run([sys.executable, 'tests/test-dizi-pmic-glink.py'])
+    run([sys.executable, 'tests/test-dizi-pmic-sched-0110.py'])
     run([sys.executable, 'tests/test-dizi-usb-link.py'])
     blob = ROOT / 'research/dizi-novatek-fw/novatek_ts_fw_boe.bin'
     with tempfile.TemporaryDirectory(prefix='dizi-nvt-port-') as folder:

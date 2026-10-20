@@ -13,6 +13,56 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21 software-only 0107–0111 integration checkpoint (NEW Mac
+  full-link result pending):** Added 0107 source-validated optional 4+4
+  A55/A78 CPU topology and identity-free 5 KB tracked FDT CPU excerpt;
+  legacy `cpus=1` and default ADT remain unchanged. 0108 integrates the
+  SE9 root-clock/TLMM/GPIO54 register planner into XNU, but hard-codes
+  XNU plan publication **OFF** (`SE9_XNU_PUBLISH_PLAN=0`); 143 fake MMIO
+  checks pass and no hardware write backend exists. 0109 fixes the LCD
+  fade race by guarding each scanline with `fLock` + a generation epoch,
+  with threaded adversarial host tests; actual panel rails/backlight remain
+  unimplemented. 0110 adds an epoch-tagged opt-in PMIC-GLINK GET request
+  scheduler and XNU battery state handoff above the existing 0105 parser;
+  **there is no actual ADSP/SMEM/GLINK remote transport or real measurement**.
+  0111 hardens the existing polled UFS/GPT root driver against overflowing
+  entry counts, out-of-range READ/WRITE(10) extents, and negative block
+  indices; 39 ASan/UBSan host assertions pass and `sweet_ufs.c` emitted a
+  real Apple ARM64 Mach-O object. All 0107/0108/0109/0110/0111 patches
+  applied successively onto downloaded CI0106 XNU sources (0111 applied
+  early because it affects an independent C file); `machine_routines.c`,
+  `sweet_ufs.c`, `se9_clock.c`, and `dizi_se9_xnu.c` compiled to ARM64 Mach-O;
+  SweetCPU.cpp, SweetFramebuffer.cpp and SweetBattery.cpp passed syntax-
+  compatibility checks with Apple-only allocator builtin shims. These
+  results are **not** a new full XNU link or physical hardware validation.
+  See `research/dizi-ci0106` (ignored) and tests/test-dizi-port.py.
+
+- **2026-10-21 XNU 0101–0106 complete macOS build VERIFIED without device access:**
+  GitHub Actions `39465604101` completed `success` (commit `71a2b4e`,
+  Apple macos-14 runner, MACHINE_CONFIG=SWEET, DEVELOPMENT). All build,
+  artifact upload and buildtree archive steps succeeded. Downloaded
+  `xnu-kernel` to ignored `xnu/out-0106/` and checked `SHA256SUMS`:
+  `kernel.development.sweet` is a 17,266,272-byte ARM64 Mach-O executable,
+  SHA-256 `34537ec17ff2457f0bae9e9cdc9c1011b2fd991fc3f63b4ccb63534a5635075b`.
+  Workflow: https://github.com/omame1203/ios-sweet/actions/runs/39465604101.
+  This proves a full XNU source build/link for those patches, **not** real
+  RTC, SMMU DMA, LCD backlight, PMIC transport, touch or USB runtime operation.
+  The later `d1d00a0` HEAD contains USB test changes only and was not the
+  workflow head SHA. No POCO Pad boot, flash, reboot, or other device command
+  was issued during verification.
+
+- **2026-10-21 0107 dizi CPU topology source checkpoint (experimental,
+  not yet macOS kernel-linked):** new `0107-dizi-cpu-topology.patch`,
+  `tools/mkadt-dizi-topology.py`, and `tests/test-dizi-cpu-topology.py`
+  characterize verified FDT 4x Cortex-A55 + 4x Cortex-A78 at MPIDR
+  0x000..0x700 and preserve the original ADT byte-for-byte by default.
+  An explicit two-cluster ADT plus `dizihw=1 dizismpclusters=1 cpus>1`
+  is required to expose E/P metadata; the current default `cpus=1` is
+  unchanged. Offline ADT roundtrip, source FDT rejection, patch application,
+  Mach-O C translation unit and compatible C++ syntax checks passed.
+  These checks neither enable secondary cores by default nor prove PSCI/GICR,
+  cache/TLB, scheduling, CPU hotplug, or sustained device SMP.
+
 - **2026-10-21 software-only implementation continuation (NO device boot):**
   Responding to the request to implement the remaining POCO Pad iPadOS
   platform support without a temporary boot, added new XNU patch series
