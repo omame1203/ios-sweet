@@ -13,6 +13,8 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21 0112/0113 integration candidate (source-only):** 0112 adds opt-in `dizigptverify=1` read-only GPT primary header/table CRC32 and extent validity, default disabled and checked before partition selection; 67 synthetic malformed/boundary assertions with ASan/UBSan, staged 0111->0112 XNU patch and native ARM64 object pass. 0113 adds opt-in `dizirtctime=1` monotonic RTC advancement / plausible-time gate and XNU calendar seed that refuses replacing a valid clock, no PMIC writes; ASan/UBSan, source patch and `sweet_keys.c` + `clock.c` genuine ARM64 Mach-O objects pass. These are not real device measurements or physical runtime validation; full macOS link still pending at this checkpoint. SMMU SID 0x403/0x416 ownership remains unproved, no GPI/SE9 write or DMA; ADSP/GLINK transport, LCD rails, PSCl/GICR SMP and native USB networking are not yet operational.
+
 - **2026-10-21 0107–0111 FULL MACOS XNU BUILD SUCCESS, NO DEVICE:**
   macOS GitHub Actions `39470099403`, commit `e1ab9a402712060af69d7d95989c18deb3a6848e`,
   `MACHINE_CONFIG=SWEET`/`DEVELOPMENT`, success (kernel build/link and

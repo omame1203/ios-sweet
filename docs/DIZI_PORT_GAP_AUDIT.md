@@ -170,3 +170,14 @@ Performance caveat: the saved native GUI log explicitly reports
 performed by CPU copies rather than a native GPU/MDSS driver. Thus slow
 response has several plausible causes and must not be attributed solely
 to the CPU count without latency measurements.
+
+## 2026-10-21 source-only 0112–0113 audit
+
+- UFS: gated primary GPT header/table CRC32, bounds, and populated-entry consistency added in 0112; offline synthetic validation only. No UFS PHY cold reset, queue interrupts, flush/error recovery or verified physical GPT.
+- RTC: 0113 guarded one-time wall-clock seeding from read-only PMK8350 ticks; no live counter confidence and boot arg disabled by default.
+- Touch: SE9/GPI/SMMU activation still blocked by unknown exclusive ownership and SIDs 0x403/0x416 with unmatched fault active; do not start DMA.
+- Power/thermal: only software state machine and scheduler, no ADSP/PDR/SMEM/GLINK transport, no actual battery or thermal sample.
+- Display: framebuffer generation race addressed, no verified physical backlight/DSI rails ownership.
+- SMP: topology metadata available opt-in, `cpus=1` baseline maintained, no proven secondary-core PSCI/GICR bringup.
+- USB: Apple IONetworkingFamily collides with existing fake IONetworkController and duplicates ifnet; no integration permitted without ownership redesign.
+- Wi-Fi/Bluetooth, GPU, ADSP audio, cameras, sensors, pen, suspend/resume and secure-world compatibility remain outstanding; source/runtime implementation and provenance needed.

@@ -1,0 +1,240 @@
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -10,6 +10,7 @@
+ #include <sys/sysctl.h>
+ #include <sys/errno.h>
+ #include <kern/locks.h>
++#include "dizi_rtc_wallclock_0113.h"
+ #include <kern/clock.h>
+ #include <kern/thread.h>
+ #include <kern/sched_prim.h>
+@@ -19,6 +20,7 @@
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern void sweet_hid_key(int key, int down);
+ void sweet_keys_init(void);
++extern bool clock_seed_calendar_from_dizi_rtc(clock_sec_t, clock_usec_t);
+ 
+ #define KEYS_CORE_PA     0x0c440000u
+ #define KEYS_OBS_PA      0x0e600000u
+@@ -160,9 +162,8 @@
+ /* Explicitly opt in: dizihw=1 dizirtc=1. Exposes fresh seconds to userland:
+  * sysctlbyname("kern.dizirtc_seconds", &uint64, &len, NULL, 0).
+  * A plausible counter value alone is NOT proof of calibrated UTC or ticking.
+- * No call to clock_set_calendar_microtime/PEGetUTCTimeOfDay/settimeofday:
+- * current physical RTC state has not been measured, so we cannot choose
+- * an authoritative wall clock source automatically. */
++ * A separate dizirtctime=1 may seed the software wall clock once after
++ * proving the RTC seconds counter advances; it never writes the PMIC. */
+ static int
+ sysctl_dizi_rtc_seconds SYSCTL_HANDLER_ARGS
+ {
+@@ -193,6 +194,44 @@
+ 	clock_interval_to_deadline(20, NSEC_PER_MSEC, &deadline);
+ 	(void)assert_wait_deadline(&keys_sleep_chan, THREAD_UNINT, deadline);
+ 	thread_block(THREAD_CONTINUE_NULL);
++}
++
++/* Only invoked in normal BSD thread context after IOKitInitializeTime.
++ * Every RTC sample is a CTRL.EN-checked, tear-rejected 0101 observation.
++ * The counter must actually advance in a bounded monotonic interval. */
++static bool
++dizi_rtc_wall_sample(uint32_t *seconds)
++{
++    struct dizi_rtc_wall_pair pair = {0};
++    if (!seconds || !dizi_rtc_ready)
++        return false;
++    lck_mtx_lock(&dizi_rtc_lock);
++    pair.first_valid = dizi_rtc_sample(&pair.first);
++    lck_mtx_unlock(&dizi_rtc_lock);
++    if (!pair.first_valid)
++        return false;
++    uint64_t start_ns = 0;
++    absolutetime_to_nanoseconds(mach_absolute_time(), &start_ns);
++    for (unsigned attempt = 0; attempt < 140u; attempt++) {
++        keys_wait();
++        uint64_t now_ns = 0;
++        absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++        if (now_ns < start_ns)
++            return false;
++        uint64_t elapsed_ms = (now_ns - start_ns) / 1000000ULL;
++        if (elapsed_ms > DIZI_RTC_MAX_TICK_WAIT_MS)
++            return false;
++        lck_mtx_lock(&dizi_rtc_lock);
++        pair.next_valid = dizi_rtc_sample(&pair.next);
++        lck_mtx_unlock(&dizi_rtc_lock);
++        if (!pair.next_valid)
++            return false;
++        pair.elapsed_ms = (uint32_t)elapsed_ms;
++        if (pair.next == pair.first)
++            continue;
++        return dizi_rtc_wall_candidate(&pair, seconds);
++    }
++    return false;
+ }
+ 
+ static void
+@@ -238,11 +277,13 @@
+ 	}
+ 	keys_started = true;
+ 	(void)PE_parse_boot_argn("sweetkeys", &enabled, sizeof(enabled));
+-	int dizi = 0, rtc_requested = 0;
++	int dizi = 0, rtc_requested = 0, rtctime_requested = 0;
+ 	PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
+ 	keys_dizi = dizi != 0;
+ 	PE_parse_boot_argn("dizirtc", &rtc_requested, sizeof(rtc_requested));
++	PE_parse_boot_argn("dizirtctime", &rtctime_requested, sizeof(rtctime_requested));
+ 	bool rtc = keys_dizi && rtc_requested == 1;
++	bool rtc_wall = rtc && rtctime_requested == 1;
+ 	if (!enabled && !rtc) {
+ 		printf("SWEET KEYS: disabled (sweetkeys=0); RTC disabled\n");
+ 		return;
+@@ -288,6 +329,16 @@
+ 			printf("DIZI RTC: no apps-owned PPID 0x061; disabled\n");
+ 		}
+ 	}
++	if (rtc_wall && dizi_rtc_ready) {
++        uint32_t seconds = 0;
++        if (dizi_rtc_wall_sample(&seconds)) {
++            bool accepted = clock_seed_calendar_from_dizi_rtc(seconds, 0);
++            printf("DIZI RTC: wall seed %s seconds=%u (no RTC write)\n",
++                accepted ? "applied" : "skipped existing valid clock", seconds);
++        } else {
++            printf("DIZI RTC: wall seed rejected invalid/stopped RTC\n");
++        }
++    }
+ 	if (!enabled) {
+ 		printf("SWEET KEYS: disabled (sweetkeys=0); RTC observer only\n");
+ 		return;
+--- a/osfmk/kern/clock.c
++++ b/osfmk/kern/clock.c
+@@ -68,6 +68,9 @@
+ #include <kern/sched_prim.h>
+ #include <kern/thread.h>
+ #include <kern/clock.h>
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include "../../bsd/dev/dizi_rtc_wallclock_0113.h"
++#endif
+ #include <kern/host_notify.h>
+ #include <kern/thread_call.h>
+ #include <libkern/OSAtomic.h>
+@@ -849,6 +852,65 @@
+ 
+ 	lck_mtx_unlock(&settime_lock);
+ }
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/*
++ * 0101 PMK8350 observer -> XNU software calendar one-shot seed.
++ * In bsd_init, IOKitInitializeTime/clock_initialize_calendar precedes the
++ * UFS sweet_keys_init call. The settime_lock interlocks with settimeofday.
++ * Never call PESetUTCTimeOfDay (platform RTC write) on this path.
++ */
++bool
++clock_seed_calendar_from_dizi_rtc(clock_sec_t secs, clock_usec_t microsecs)
++{
++    uint64_t absolutesys, commpage_value = 0;
++    clock_sec_t oldsecs, deltasecs;
++    clock_usec_t oldmicrosecs, deltamicrosecs;
++    struct bintime bt;
++    spl_t s;
++    bool accepted = false;
++
++    if (secs < DIZI_RTC_WALL_MIN || secs >= DIZI_RTC_WALL_MAX ||
++        microsecs != 0)
++        return false;
++
++    lck_mtx_lock(&settime_lock);
++    s = splclock();
++    clock_lock();
++    clock_get_calendar_absolute_and_microtime_locked(
++        &oldsecs, &oldmicrosecs, &absolutesys);
++    if (dizi_rtc_wall_may_seed((uint64_t)oldsecs)) {
++        commpage_disable_timestamp();
++        deltasecs = secs;
++        deltamicrosecs = microsecs;
++        TIME_SUB(deltasecs, oldsecs, deltamicrosecs, oldmicrosecs, USEC_PER_SEC);
++        TIME_ADD(clock_boottime, deltasecs, clock_boottime_usec,
++            deltamicrosecs, USEC_PER_SEC);
++        clock2bintime(&deltasecs, &deltamicrosecs, &bt);
++        bintime_add(&clock_calend.boottime, &bt);
++        clock_calend.bintime = clock_calend.boottime;
++        bintime_add(&clock_calend.bintime, &clock_calend.offset);
++        clock2bintime(&secs, &microsecs, &bt);
++        clock_gettimeofday_set_commpage(absolutesys, bt.sec, bt.frac,
++            clock_calend.tick_scale_x, ticks_per_sec);
++        commpage_value = clock_boottime * USEC_PER_SEC +
++            clock_boottime_usec;
++        accepted = true;
++    }
++    clock_unlock();
++    splx(s);
++    if (accepted) {
++        commpage_update_boottime(commpage_value);
++        host_notify_calendar_change();
++        host_notify_calendar_set();
++#if CONFIG_DTRACE
++        clock_track_calend_nowait();
++#endif
++    }
++    lck_mtx_unlock(&settime_lock);
++    return accepted;
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+ 
+ uint64_t mach_absolutetime_asleep = 0;
+ uint64_t mach_absolutetime_last_sleep = 0;
+diff --git a/bsd/dev/dizi_rtc_wallclock_0113.h b/bsd/dev/dizi_rtc_wallclock_0113.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/dizi_rtc_wallclock_0113.h
+@@ -0,0 +1,50 @@
++/* Dizi PMK8350 RTC policy for an optional, one-time XNU wall-clock seed.
++ * Pure policy: no RTC writes, MMIO, clock setters or boot hooks here.
++ * A single plausible number is insufficient: two separately validated
++ * observer snapshots must demonstrate the seconds register advancing.
++ */
++#ifndef DIZI_RTC_WALLCLOCK_0113_H
++#define DIZI_RTC_WALLCLOCK_0113_H
++#include <stdint.h>
++#include <stdbool.h>
++
++/* This intentionally narrow time window is a sanity policy, not proof that
++ * the chip's value is synchronized to UTC. Exclude counter resets and wrap.
++ * Both endpoints are seconds since UNIX epoch in UTC. */
++#define DIZI_RTC_WALL_MIN 1704067200u /* 2024-01-01 00:00:00 UTC */
++#define DIZI_RTC_WALL_MAX 2051222400u /* 2035-01-01 exclusive */
++#define DIZI_RTC_CLOCK_INVALID_BEFORE 1577836800u /* 2020-01-01 */
++#define DIZI_RTC_MIN_TICK_WAIT_MS 20u
++#define DIZI_RTC_MAX_TICK_WAIT_MS 2800u
++
++struct dizi_rtc_wall_pair {
++    uint32_t first;       /* stable double-read with CTRL.EN verified */
++    uint32_t next;        /* second double-read with CTRL.EN reverified */
++    uint32_t elapsed_ms;  /* monotonic elapsed between independent samples */
++    bool first_valid;
++    bool next_valid;
++};
++
++static inline bool
++dizi_rtc_wall_candidate(const struct dizi_rtc_wall_pair *p, uint32_t *seconds)
++{
++    if (!p || !seconds || !p->first_valid || !p->next_valid ||
++        p->elapsed_ms < DIZI_RTC_MIN_TICK_WAIT_MS ||
++        p->elapsed_ms > DIZI_RTC_MAX_TICK_WAIT_MS ||
++        p->first < DIZI_RTC_WALL_MIN || p->next >= DIZI_RTC_WALL_MAX ||
++        p->next <= p->first || p->next - p->first > 3u)
++        return false;
++    *seconds = p->next;
++    return true;
++}
++
++/* Must be rechecked INSIDE XNU's settime_lock, atomically with the update:
++ * a check in the RTC caller alone would race settimeofday/NTP. Once the
++ * calendar has any plausible date, never seed it from untrusted RTC again. */
++static inline bool
++dizi_rtc_wall_may_seed(uint64_t existing_secs)
++{
++    return existing_secs < DIZI_RTC_CLOCK_INVALID_BEFORE;
++}
++
++#endif /* DIZI_RTC_WALLCLOCK_0113_H */
