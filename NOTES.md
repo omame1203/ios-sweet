@@ -11,6 +11,25 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **Read-only recovery of native console prepared:** optional
+  `DIZI_UFS_LOG=1` with UFS diag/wake reads the existing SWEETLOG area at
+  the end of userdata, validates header/version/4 MiB ring and exports at
+  most 128 KiB through the shim USB log. No block writes. Image
+  `shim/out/dizi/shim-boot-ufs-log-reader.img`, SHA-256
+  `32a3a29b43b204edb1f7f17e8e749b9bcc460f8819f365cdec09ce0b9a8ce8b7`.
+  Built and USB protocol host tests passed; this new reader path has not
+  yet been hardware-tested. Native next boot should use `sweetlog=1
+  ufslogsecs=1` so logs can survive a manual reset if USB fails. A panic
+  before the first flush can still leave no saved log. Do not assert a
+  new log exists without checking its header/sequence/content.
+- **0097 native build running**: CI 39437053376 at f845ef1,
+  https://github.com/omame1203/ios-sweet/actions/runs/39437053376 .
+  Prior 0096 CI 39435889409 completed successfully in 7m12s. Its kernel
+  artifact download (exec session 12940) completed; artifact in xnu/out-0096/. Do not cancel/restart a live build just for an observation
+  timeout. Native 0097 boot still pending. Tablet confirmed FASTBOOT after
+  probe 02, so no manual reset was needed at this latest check.
+
+
 - **UFS root cause isolated and corrected in the bare-metal probe**
   (2026-10-20): `logs/ufs-lun-probe-01.txt` captures inline sense
   `02/04/02` (NOT READY, initializing command required) on enabled LUNs
@@ -34,7 +53,7 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   and wake remain optional build flags, both disabled by default.
   ACTIVE fixes access in the probe; the exact inherited power-mode value
   was not queried, so do not assert that SLEEP specifically was measured.
-  Next: finish current 0096 CI, build 0097, temporary native boot using
+  Next: finish current 0097 CI, temporary native boot using
   the actual iPadOS root, observe mount/launchd and any next failure.
 - User returned the tablet to FASTBOOT for the wake probe. The diagnostic
   asks for reset after log capture; do not assume it returns to fastboot:

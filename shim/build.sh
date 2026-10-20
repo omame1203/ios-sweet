@@ -21,6 +21,9 @@ fi
 if [ "$BOARD" = dizi ] && [ "${DIZI_UFS_WAKE:-0}" = 1 ]; then
 	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_UFS_WAKE"
 fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_UFS_LOG:-0}" = 1 ]; then
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_UFS_LOG"
+fi
 mkdir -p "$OUT"
 objects=()
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c bootlog.c usb_control.c usb_diag.c; do

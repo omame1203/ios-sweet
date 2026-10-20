@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include "console.h"
 #include "ufs.h"
+#include "bootlog.h"
 
 #define UFS_BASE	0x01d84000UL	/* ufshc@1d84000, sweet and dizi live FDT */
 
@@ -176,6 +177,43 @@ static int name_is(const char *a, const char *b)
 	return *a == *b;
 }
 
+#ifdef DIZI_UFS_LOG
+/* Read the existing XNU console tail from the end of userdata. No recovery
+ * or Android mount is required. Its header/layout is shared with sweet-log.py.
+ * Export at most 128 KiB, leaving space in the shim's RAM console ring. */
+static void previous_xnu_log(uint64_t first, uint64_t last)
+{
+	const uint32_t ring_size = 4u << 20, max_tail = 128u << 10;
+	if (last < first || last - first < 1024 || last > 0xffffffff) return;
+	uint32_t base = (uint32_t)last - 1024;
+	if (read_blocks(base, 1, data)) return;
+	if (__builtin_memcmp(data, "SWEETLOG", 8) || le64(data + 8) != ((uint64_t)ring_size << 32 | 1)) {
+		con_str("XNU log", "no saved console header");
+		return;
+	}
+	uint64_t total = le64(data + 16);
+	con_hex("XNU total", total);
+	uint32_t left = total < max_tail ? (uint32_t)total : max_tail;
+	uint64_t pos = total - left;
+	char text[BLOCK + 1];
+	bootlog_puts("\n=== PREVIOUS XNU CONSOLE TAIL ===\n");
+	while (left) {
+		uint32_t off = (uint32_t)(pos % ring_size), skip = off % BLOCK;
+		uint32_t n = BLOCK - skip;
+		if (n > left) n = left;
+		if (read_blocks(base + 1 + off / BLOCK, 1, data)) {
+			con_str("XNU log", "read failed; tail incomplete");
+			break;
+		}
+		for (uint32_t i = 0; i < n; i++) text[i] = data[skip + i] ? data[skip + i] : ' ';
+		text[n] = 0;
+		bootlog_puts(text);
+		left -= n; pos += n;
+	}
+	bootlog_puts("\n=== END PREVIOUS XNU CONSOLE TAIL ===\n");
+}
+#endif
+
 /* Name the filesystem whose superblock starts at block lba (f2fs/ext4). */
 static const char *fs_type(uint32_t lba)
 {
@@ -218,6 +256,9 @@ static void list_partitions(uint32_t entry_lba, uint32_t nent)
 		con_hex2(name, "lba=", (uint32_t)first, "MiB=", (uint32_t)((last - first + 1) >> 8));
 		if (name_is(name, "userdata") || name_is(name, "cust") || name_is(name, "cache"))
 			con_str(" fs", fs_type((uint32_t)first));
+#ifdef DIZI_UFS_LOG
+		if (name_is(name, "userdata")) previous_xnu_log(first, last);
+#endif
 	}
 }
 
