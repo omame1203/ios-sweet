@@ -1,0 +1,193 @@
+diff --git a/bsd/dev/sweet_lcd_owner_0116.h b/bsd/dev/sweet_lcd_owner_0116.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/sweet_lcd_owner_0116.h
+@@ -0,0 +1,121 @@
++/*
++ * POCO Pad (dizi) LCD GPIO57 backlight ownership gate, source-only.
++ *
++ * Android FDT describes a BOE NT36532 CPHY VIDEO panel (alternative CSOT),
++ * GPIO57 backlight enable, GPIO98 reset, and external 12-bit brightness.
++ * Its selected BOE panel-supply-entries phandle points at a "dummy" supply.
++ * None of those static descriptions proves that XNU owns the pin, reset,
++ * DSI engine, or display rails inherited from ABL/Gunyah firmware.
++ *
++ * The witness is reserved for a FUTURE kernel-only controller that really
++ * observes all of the facts below. This interface never touches MMIO or
++ * creates such a witness from a boot argument or a firmware tree.
++ * Callers must hold the framebuffer power lock through request/completion.
++ */
++#ifndef DIZI_LCD_BACKLIGHT_OWNER_0116_H
++#define DIZI_LCD_BACKLIGHT_OWNER_0116_H
++
++#include "sweet_lcd.h"
++
++#define DIZI_LCD_0116_BOE_IDENTIFIED        (1u << 0)
++#define DIZI_LCD_0116_DSI_VIDEO_OBSERVED   (1u << 1)
++#define DIZI_LCD_0116_GPIO57_EXCLUSIVE     (1u << 2)
++#define DIZI_LCD_0116_GPIO57_OUTPUT        (1u << 3)
++#define DIZI_LCD_0116_GPIO57_ACTIVE_HIGH   (1u << 4)
++#define DIZI_LCD_0116_GPIO57_READBACK      (1u << 5)
++#define DIZI_LCD_0116_DISPLAY_RAILS_STABLE (1u << 6)
++#define DIZI_LCD_0116_RESET98_STABLE       (1u << 7)
++#define DIZI_LCD_0116_BACKEND_PRESENT      (1u << 8)
++#define DIZI_LCD_0116_REQUIRED (DIZI_LCD_0116_BOE_IDENTIFIED | \
++    DIZI_LCD_0116_DSI_VIDEO_OBSERVED | DIZI_LCD_0116_GPIO57_EXCLUSIVE | \
++    DIZI_LCD_0116_GPIO57_OUTPUT | DIZI_LCD_0116_GPIO57_ACTIVE_HIGH | \
++    DIZI_LCD_0116_GPIO57_READBACK | DIZI_LCD_0116_DISPLAY_RAILS_STABLE | \
++    DIZI_LCD_0116_RESET98_STABLE | DIZI_LCD_0116_BACKEND_PRESENT)
++
++struct dizi_lcd_owner_0116 {
++    bool armed; /* dizihw=1 dizilcd=1 diziblowner=1, none grants ownership */
++};
++
++/* A snapshot of READ-ONLY, independently verified kernel driver state.
++ * Crucially, this structure is never constructed by the XNU 0116 driver:
++ * no trusted observer or GPIO ownership backend exists today. */
++struct dizi_lcd_witness_0116 {
++    uint32_t observed_bits;
++    uint32_t framebuffer_generation;
++};
++
++static inline void
++dizi_lcd_owner_0116_init(struct dizi_lcd_owner_0116 *owner,
++    bool selected, bool opt_in)
++{
++    owner->armed = selected && opt_in;
++}
++
++/* Missing bits are reported honestly, with an absent observer treated as
++ * UNKNOWN, rather than inferring a pin state from a static FDT or the splash. */
++static inline uint32_t
++dizi_lcd_owner_0116_missing(const struct dizi_lcd_owner_0116 *owner,
++    const struct dizi_lcd_witness_0116 *witness,
++    const struct sweet_lcd_backlight_ops *ops)
++{
++    uint32_t observed = 0;
++    if (owner != 0 && owner->armed && witness != 0)
++        observed = witness->observed_bits & ~DIZI_LCD_0116_BACKEND_PRESENT;
++    if (owner != 0 && owner->armed && ops != 0 &&
++        ops->get_enabled != 0 && ops->set_enabled != 0)
++        observed |= DIZI_LCD_0116_BACKEND_PRESENT;
++    return DIZI_LCD_0116_REQUIRED & ~observed;
++}
++
++/* The witnessed generation must match the current 0103/0109 fade epoch's
++ * hardware generation before granting the existing readback-verified backend.
++ * A stale snapshot is not an authorization for a later power transition. */
++static inline bool
++dizi_lcd_owner_0116_proof(const struct dizi_lcd_owner_0116 *owner,
++    const struct sweet_lcd_state *lcd,
++    const struct dizi_lcd_witness_0116 *witness,
++    const struct sweet_lcd_backlight_ops *ops,
++    struct sweet_lcd_proof *proof)
++{
++    if (owner == 0 || !owner->armed || lcd == 0 || !lcd->selected ||
++        witness == 0 || ops == 0 || proof == 0 ||
++        witness->framebuffer_generation != lcd->generation ||
++        dizi_lcd_owner_0116_missing(owner, witness, ops) != 0)
++        return false;
++    proof->boe_panel_confirmed = true;
++    proof->dsi_video_scanning = true;
++    proof->tlmm57_exclusive_owner = true;
++    proof->tlmm57_is_gpio_output = true;
++    proof->tlmm57_active_high_confirmed = true;
++    return true;
++}
++
++/* This wrapper is the sole authorized 0116 XNU entry into the 0103 power
++ * model. A failed witness forwards NULL proof/ops, preserving software black
++ * and preventing a physical toggle. For actual IO, 0103 still demands
++ * hardware get/set readback and rolls back failed writes. */
++static inline int
++dizi_lcd_owner_0116_request(struct sweet_lcd_state *lcd,
++    const struct dizi_lcd_owner_0116 *owner, bool off,
++    const struct dizi_lcd_witness_0116 *witness,
++    const struct sweet_lcd_backlight_ops *ops)
++{
++    struct sweet_lcd_proof proof;
++    if (dizi_lcd_owner_0116_proof(owner, lcd, witness, ops, &proof))
++        return sweet_lcd_request(lcd, off, &proof, ops);
++    return sweet_lcd_request(lcd, off, 0, 0);
++}
++
++static inline int
++dizi_lcd_owner_0116_black_frame_done(struct sweet_lcd_state *lcd,
++    const struct dizi_lcd_owner_0116 *owner, uint32_t generation,
++    const struct dizi_lcd_witness_0116 *witness,
++    const struct sweet_lcd_backlight_ops *ops)
++{
++    struct sweet_lcd_proof proof;
++    if (dizi_lcd_owner_0116_proof(owner, lcd, witness, ops, &proof))
++        return sweet_lcd_black_frame_done(lcd, generation, &proof, ops);
++    return sweet_lcd_black_frame_done(lcd, generation, 0, 0);
++}
++
++#endif /* DIZI_LCD_BACKLIGHT_OWNER_0116_H */
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -38,6 +38,7 @@
+  */
+ #include "SweetSurface.h"
+ #include "../../../bsd/dev/sweet_lcd.h"
++#include "../../../bsd/dev/sweet_lcd_owner_0116.h"
+ 
+ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ 
+@@ -121,6 +122,7 @@
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
+ 	uint64_t      fFadeEpoch;     /* guarded by fLock; distinct from hardware generation */
+ 	struct sweet_lcd_state fDiziLCD; /* no native MMIO backend */
++	struct dizi_lcd_owner_0116 fDiziLCDOwner; /* witness absent */
+ 
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+ 	void addClient(IOMobileFramebufferUserClient *client);
+@@ -201,6 +203,11 @@
+ 	(void)PE_parse_boot_argn("dizihw", &dizi, sizeof(dizi));
+ 	(void)PE_parse_boot_argn("dizilcd", &lcd, sizeof(lcd));
+ 	sweet_lcd_init(&fDiziLCD, dizi == 1, lcd == 1, fWidth, fHeight);
++	/* Diagnostic gate only. Static FDT and boot flags cannot prove that
++	 * XNU owns GPIO57, GPIO98, DSI or the PMIC supply paths. */
++	int blowner = 0;
++	(void)PE_parse_boot_argn("diziblowner", &blowner, sizeof(blowner));
++	dizi_lcd_owner_0116_init(&fDiziLCDOwner, fDiziLCD.selected, blowner == 1);
+ 	fPowerOff = false;
+ 	fFadeStep = 0;
+ 	fFadeEpoch = 0;
+@@ -233,6 +240,14 @@
+ 		setProperty("DiziLCDPhysicalBacklightAvailable", kOSBooleanFalse);
+ 		setProperty("DiziLCDPanelResetAvailable", kOSBooleanFalse);
+ 		setProperty("DiziLCDBrightnessTransportAvailable", kOSBooleanFalse);
++		if (fDiziLCDOwner.armed) {
++			/* No kernel source has established live ID / scanout / TLMM
++			 * ownership / rail state or installed a GPIO readback backend. */
++			setProperty("DiziLCDBacklightOwnerGate", "missing-hardware-witness");
++			setProperty("DiziLCDBacklightOwnerMissingMask",
++			    (unsigned long long)dizi_lcd_owner_0116_missing(
++			    &fDiziLCDOwner, NULL, NULL), 32);
++		}
+ 	}
+ 	registerService();
+ 	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+@@ -293,7 +308,9 @@
+ 			/* Both the framebuffer and 0103 hardware-generation epochs
+ 			 * must still match before declaring the black frame done. */
+ 			if (fb->fPowerOff && fb->fFadeEpoch == fadeEpoch) {
+-				(void)sweet_lcd_black_frame_done(&fb->fDiziLCD, generation, NULL, NULL);
++				/* No trusted witness or owned GPIO backend: still black only. */
++				(void)dizi_lcd_owner_0116_black_frame_done(
++				    &fb->fDiziLCD, &fb->fDiziLCDOwner, generation, NULL, NULL);
+ 			}
+ 			IOLockUnlock(fb->fLock);
+ 		}
+@@ -594,7 +611,8 @@
+ 		if (args->scalarInputCount >= 1) {
+ 			bool off = args->scalarInput[0] == 0;
+ 			IOLockLock(fFB->fLock);
+-			int lcdResult = sweet_lcd_request(&fFB->fDiziLCD, off, NULL, NULL);
++			int lcdResult = dizi_lcd_owner_0116_request(
++			    &fFB->fDiziLCD, &fFB->fDiziLCDOwner, off, NULL, NULL);
+ 			if (lcdResult == SWEET_LCD_ERROR) {
+ 				ret = kIOReturnNotReady;
+ 			} else if (off != fFB->fPowerOff) {

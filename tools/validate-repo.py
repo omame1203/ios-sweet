@@ -18,7 +18,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 0093 was removed by be256d7: its fixed IO submap address was outside
 # kernel_map on ARM_LARGE_MEMORY. Keep later patch/build identities stable.
-RETIRED_PATCHES = {93}
+# 0115: native IONetworkingFamily migration was deliberately not introduced:
+# existing BSD ue0 owns its ifnet while Apple IONetworkInterface allocates a
+# second, and 0098 defines conflicting IONetworkController symbols. Only the
+# separate offline migration policy uses the 0115 identifier.
+RETIRED_PATCHES = {93, 115}
 
 
 def green(text): return f"\033[92m{text}\033[0m"

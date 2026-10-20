@@ -186,3 +186,5 @@ to the CPU count without latency measurements.
 
 - **0114 source implementation:** guarded, read-only partial SMMUv2 GR0 audit in XNU (ID0/ID1/sCR0/SMR0 only), proven register addresses from past probes. No ID2/S2CR mapping, hypervisor stream ownership, CB allocation, GPI DMA enable or bus write; 54 simulated assertions + native ARM64 objects only.
 - **0115 native IONetworkingFamily blocker:** true IONetworkInterface unconditionally allocates a second BSD ifnet, while fake IONetworkController class collides at link; only a standalone fail-closed future migration planner passes host tests, not native functional integration.
+
+- **0116 LCD XNU integration:** default-disabled physical backlight ownership witness contract, wired into SweetFramebuffer black-frame request/completion; no trusted live witness/GPIO ownership/rail or DSI backend, thus no physical power toggle. Synthetic host tests + native ARM64 translation-unit check only. 0115 patch number reserved for rejected native networking migration (actual USB portable policy is not an XNU kext).
