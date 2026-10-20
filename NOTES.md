@@ -13,13 +13,24 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21: physical volume-up as Home confirmed on native iPadOS.**
+  Following the restored 0099 key-test temporary boot, the user explicitly
+  confirmed that pressing the POCO Pad's real **volume-up button performs
+  the iPadOS Home action** (`sweetkeys=1 dizihomekey=1`). Along with the
+  earlier confirmed physical power-key response, this verifies a second
+  real PMIC-key-to-iPadOS-HID user-visible input path. This remains an
+  intentional key remap for testing; native volume-up semantics are not
+  claimed, and volume-down, physical touch and key-response latency remain
+  unverified. The current iPadOS trial need not be interrupted.
+
 - **After the read-only probe series, restored the previously user-confirmed
   0099 physical power-key iPadOS trial by `fastboot boot`**, using saved
   `shim/out/dizi/shim-boot-ipados0099-keytest.img` SHA-256
   `2dbe1f8f62887e23d131ca4cc350b118656a81b0359a02864b7087407e162326`.
   Fastboot accepted send0.379s/boot0.343s (total0.732s). This is a temporary
-  boot with no partition writes. **Its new GUI/volume-key behavior has not
-  yet been visually reconfirmed** after the SMMU probes. Touch remains off
+  boot with no partition writes. The user has now confirmed physical volume-up
+  works as Home on this trial; screen appearance was not independently
+  photographed or logged in this run. Touch remains off
   (`sweettouch=0`); user previously verified physical power key worked but
   slowly on this exact image. Do not reboot the trial merely to collect
   additional logs; await user observation of volume-up-as-Home and keys.
@@ -195,7 +206,8 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   send0.379s / boot0.345s, total0.734s. **User reports physical POWER key
   functioned, with slow response, in the 0099 trial.** This is positive
   real-hardware evidence for the power-key path. Physical volume-up mapped to
-  Home and volume-down are still unverified, and no event timestamps/latency
+  Home was subsequently user-confirmed on the same 0099 boot configuration;
+  volume-down remains unverified, and no event timestamps/latency
   measurements have been captured. The current cmdline uses `cpus=1`, which
   may contribute to perceived latency; this causal explanation is untested.
   This boot
