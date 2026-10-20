@@ -27,11 +27,13 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   from its actual superblock. ESP and Windows partitions still present.
   This verifies the flashed root's signature only, not an HFS mount or
   real launchd. No logical-block write command exists in the shim probe.
-- **0097 ports the verified fix to native XNU**: with `dizihw=1`, request
+- **0097 (commit 4be3f25) ports the verified fix to native XNU**: with `dizihw=1`, request
   ACTIVE via the device WLUN after taking over UTRL and before TUR/GPT.
   Ordinary LUN restored on all returns; activation failure stops init;
   partition bounds/write authorization logic is unchanged. Shim UFS diag
   and wake remain optional build flags, both disabled by default.
+  ACTIVE fixes access in the probe; the exact inherited power-mode value
+  was not queried, so do not assert that SLEEP specifically was measured.
   Next: finish current 0096 CI, build 0097, temporary native boot using
   the actual iPadOS root, observe mount/launchd and any next failure.
 - User returned the tablet to FASTBOOT for the wake probe. The diagnostic

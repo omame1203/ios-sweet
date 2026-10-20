@@ -2,7 +2,7 @@
 
 対象はPOCO Pad 2405CPCFBG（`dizi`、SM7435）。
 参考実装のRedmi Note 10 Pro（`sweet`、SM7150）とは別の機種です。
-**iPadOSのカーネル起動・ホーム画面表示は未確認です。**
+**XNUの実機実行を確認済みです。iPadOSユーザー空間・ホーム画面の起動は未確認です。**
 
 現在の構成は、既存のブートローダーから一時起動したshimがXNUを読み込む方式です。
 Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
@@ -25,8 +25,6 @@ Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
 - UFSの読み取り失敗は、デバイスが準備されていない状態（sense `02/04/02`）と実測。
   診断shimでSTART STOP UNITによりACTIVEへ切り替えると、GPT・userdata・HFSX署名を読み取れました。
   同じ処理をXNUへ移すパッチ0097を準備済み。XNUからのルートマウント・ユーザーランド起動は別途検証します。
-
-
 - 19領域のバックアップを端末側SHA-256と照合。
 - 診断shimの実機画面を確認。GIC優先度設定時の例外は、アドレス自動更新なしのMMIO命令で通過。
   仮想タイマー終了時の `CNTP_CTL_EL0` 例外も、使用していない物理タイマーへのアクセスを除いて解消しました。
@@ -37,12 +35,13 @@ Apple純正のUEFIをPOCO Padに書き込む方式ではありません。
   ディスクリプタ取得・SET_ADDRESS・SET_CONFIGURATIONの後、
   EP0経由で3,605バイトの起動ログを回収しました。ABLはstage-1 MMUを
   有効なまま渡すため、USB前にM/C/Iを明示的に落としています。ログと
-  イメージのSHA-256は `NOTES.md` に記録。Androidへは自動で復帰します。
+  イメージのSHA-256は `NOTES.md` に記録。現在はuserdata書き換え後なので、
+  Androidへの復帰は前提にせず、FASTBOOT接続を確認して一時起動します。
 - ブートとvendor_bootの両スロットは一時起動前後でハッシュ一致。
 - ローダー実装をASan・UBSan付きで検査。64種類の先頭オフセット、BSS・ADT・起動引数のコピー、
   不正なサイズ・オフセットの拒否を確認。
-- 変更したXNUのC・アセンブリとプラットフォーム照合テーブルをARM64オブジェクトへコンパイル。
-  画面サービスのC++変更は構文検査まで。完全なカーネルのリンク・起動は別途必要です。
+- GitHub Actionsで完全なARM64 XNUカーネルをリンク済み。実機で `IOFindBSDRoot` まで到達。
+  USB初期化パニックは解消していますが、XNUのUSB列挙・通信はまだ成功していません。
 - 元のsweet低位RAM・上位RAM・QEMU向けADTは、固定seedで元実装とバイト単位で一致。
 - ルートイメージのHFS+検査、主要実行ファイルのARM64形式、共有キャッシュのリンク、初期設定、SHA-256を確認。
 
@@ -55,7 +54,7 @@ python3 tools/check-dizi-board.py backup/dizi/fdt
 BOARD=dizi bash shim/build.sh
 python3 tools/mkadt.py shim/out/dizi/dizi-ipad5.adt --board dizi
 python3 tools/validate-repo.py
-python3 tools/dizi-diag.py --out logs/dizi-diag.txt   # 一時ブート→USB回収→Android復帰
+python3 tools/dizi-diag.py --out logs/dizi-diag.txt   # Android復帰を利用するため、Android使用時のみ
 ```
 
 機種情報の抽出元は `research/ipad5/j71sap.adt` です。Apple配布IPSWから取り出した実ファイルが必要です。
@@ -63,10 +62,10 @@ Appleファイル、実機デバイスツリー、バックアップ、ビルド
 バックアップを再採取するときは `--out` で新しい保存先を指定します。保存済みの内容は上書きしません。
 取得元・正確なコマンド・ビルド状況は `NOTES.md` の先頭に記録しています。
 
-残作業は、完全なXNUのビルドとQEMU検証、実機でのXNU初期起動確認、
+残作業は、XNUからのUFSルートマウント、実際のlaunchd・SpringBoard起動、
 SM7435向けのNovatek SPIタッチ・PMICキー・USBドライバーの移植です。
 参考実装のドライバーは初期試験で無効化します。
 画面のstride・ピクセル形式も、予約領域とパネル寸法だけでは確定できないため実機確認が必要です。
 
-Android、既存のWindows/ESP、ブートローダー、リカバリ、校正領域の消去は行っていません。
-参考元のuserdata消去手順は、この端末にそのまま実行しないでください。
+userdataには承認を受けてiPadOSルートイメージを書き込み済みです。
+Windows/ESP、ブートローダー、リカバリ、校正領域を保護し、追加の消去は行いません。

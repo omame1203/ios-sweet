@@ -4,7 +4,7 @@
  	return error;
  }
  
-+/* ABL leaves dizi's device in SLEEP: sense 02/04/02 on all enabled LUs.
++/* Dizi's inherited device reports sense 02/04/02 on all enabled LUs.
 + * Linux ufshcd_set_dev_pwr_mode uses SSU on the UFS device WLUN (0xd0),
 + * with ACTIVE=1 in the power-condition field. No user blocks are written. */
 +static int
