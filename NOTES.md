@@ -13,6 +13,17 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **After the read-only probe series, restored the previously user-confirmed
+  0099 physical power-key iPadOS trial by `fastboot boot`**, using saved
+  `shim/out/dizi/shim-boot-ipados0099-keytest.img` SHA-256
+  `2dbe1f8f62887e23d131ca4cc350b118656a81b0359a02864b7087407e162326`.
+  Fastboot accepted send0.379s/boot0.343s (total0.732s). This is a temporary
+  boot with no partition writes. **Its new GUI/volume-key behavior has not
+  yet been visually reconfirmed** after the SMMU probes. Touch remains off
+  (`sweettouch=0`); user previously verified physical power key worked but
+  slowly on this exact image. Do not reboot the trial merely to collect
+  additional logs; await user observation of volume-up-as-Home and keys.
+
 - **Hardware blocker resolved to SMMU routing, probe13 (2026-10-21):**
   opt-in read-only apps_smmu global sCR0 probe from temporary image
   `shim/out/dizi/shim-boot-input-probe13-smmu-scr0.img`, SHA-256
