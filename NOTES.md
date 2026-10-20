@@ -39,6 +39,14 @@ an iPhone-themed Android UI or emulator does not meet that objective.
   reinitialized by Android after the test. Host side:
   `tools/sweet-usbnet.sh logs/kernel-usb.txt`. If UFS errors before the USB
   probe, fall back to the `rd=md0` screen console.
+- **Patch 0085 (early XNU USB log) prepared and compile-checked.** With
+  `sweetearlyusb=1` in the boot args, `bsd_init()` calls `sweet_usb_probe()`
+  right after `net_init_run()` and before `vfs_mountroot()`, so a RAM-disk
+  boot can start the ECM gadget and the live UDP console without UFS. The
+  live-log thread snapshots the last 64 KiB of the console ring, so start
+  `tools/sweet-usbnet.sh` before `fastboot boot`. `bsd_init.c` passes the
+  saved CI-flag syntax check; the patch applies on the pre-edit file. Not
+  CI-built or hardware-booted yet.
 
 - **2026-10-20 USB diagnostics now work on the dizi temporary boot.** A
   `fastboot boot` image exposes a vendor EP0 device (1209:0001) that streams

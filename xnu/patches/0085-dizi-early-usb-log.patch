@@ -1,0 +1,38 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -385,6 +385,10 @@
+ 
+ extern int      (*mountroot)(void);
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++extern void sweet_usb_probe(void);
++#endif
++
+ LCK_ATTR_DECLARE(proc_lck_attr, 0, 0);
+ LCK_GRP_DECLARE(proc_lck_grp, "proc");
+ LCK_GRP_DECLARE(proc_slock_grp, "proc-slock");
+@@ -865,6 +869,23 @@
+ 	net_init_run();
+ #endif /* NETWORKING */
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/*
++	 * The sweet USB probe normally runs from sweet_ufs_rootdev() after the
++	 * UFS partition is found. A RAM-disk bring-up has no UFS, so allow the
++	 * gadget and its live UDP console to start before the root mount; the
++	 * framebuffer console alone is not observable on this tablet.
++	 */
++	{
++		int early_usb = 0;
++		PE_parse_boot_argn("sweetearlyusb", &early_usb, sizeof(early_usb));
++		if (early_usb) {
++			bsd_init_kprintf("calling sweet_usb_probe\n");
++			sweet_usb_probe();
++		}
++	}
++#endif
++
+ 	bsd_init_kprintf("calling inittodr\n");
+ 	inittodr(0);
+ 
