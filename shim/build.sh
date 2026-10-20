@@ -38,6 +38,35 @@ if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_GPI_SINGLE:-0}" = 1 ]; then
 	[ "${DIZI_INPUT_GPI:-0}" = 1 ] || { echo "GPI_SINGLE requires DIZI_INPUT_GPI=1" >&2; exit 1; }
 	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_GPI_SINGLE"
 fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_GPI_TOUCH_STATE:-0}" = 1 ]; then
+	[ "${DIZI_INPUT_GPI:-0}" = 1 ] || { echo "GPI_TOUCH_STATE requires DIZI_INPUT_GPI=1" >&2; exit 1; }
+	[ "${DIZI_INPUT_GPI_SINGLE:-0}" = 0 ] || { echo "GPI_TOUCH_STATE and GPI_SINGLE are exclusive" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_GPI_TOUCH_STATE"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_GPI_TOUCH_DETAIL:-0}" = 1 ]; then
+	[ "${DIZI_INPUT_GPI_TOUCH_STATE:-0}" = 1 ] || { echo "GPI_TOUCH_DETAIL requires GPI_TOUCH_STATE=1" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_GPI_TOUCH_DETAIL"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_SMMU_ID0:-0}" = 1 ]; then
+	[ "${DIZI_INPUT_DIAG:-0}" = 1 ] || { echo "SMMU_ID0 requires DIZI_INPUT_DIAG=1" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_SMMU_ID0"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_SMMU_ID1:-0}" = 1 ]; then
+	[ "${DIZI_INPUT_SMMU_ID0:-0}" = 1 ] || { echo "SMMU_ID1 requires SMMU_ID0=1" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_SMMU_ID1"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_SMMU_SMR0:-0}" = 1 ]; then
+	[ "${DIZI_INPUT_SMMU_ID1:-0}" = 1 ] || { echo "SMMU_SMR0 requires SMMU_ID1=1" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_SMMU_SMR0"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_SMMU_SCAN:-0}" = 1 ]; then
+	[ "${DIZI_INPUT_SMMU_SMR0:-0}" = 1 ] || { echo "SMMU_SCAN requires SMMU_SMR0=1" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_SMMU_SCAN"
+fi
+if [ "$BOARD" = dizi ] && [ "${DIZI_INPUT_SMMU_SCR0:-0}" = 1 ]; then
+	[ "${DIZI_INPUT_SMMU_ID1:-0}" = 1 ] || { echo "SMMU_SCR0 requires SMMU_ID1=1" >&2; exit 1; }
+	BOARD_FLAGS="$BOARD_FLAGS -DDIZI_INPUT_SMMU_SCR0"
+fi
 mkdir -p "$OUT"
 objects=()
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c input_diag.c bootlog.c usb_control.c usb_diag.c; do

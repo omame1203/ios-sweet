@@ -85,6 +85,24 @@ void dizi_input_diag(void)
 	/* SPI SE9's FDT DMA specifier 0x02 selects static GPII0 (gpi.c). */
 	con_str("GPI", "single read i0 TX context0 at A10000");
 	con_hex("GPI TX0", rd(0xa10000UL));
+#elif defined(DIZI_INPUT_GPI_TOUCH_STATE)
+	/* Probe06 established that GPII0 TX context0 is readable and zero.
+	 * Extend only to peer channel/event contexts, without commands or DMA. */
+	con_str("GPI", "read static i0 TX context0 A10000");
+	con_hex("GPI TX0", rd(0xa10000UL));
+	con_str("GPI", "read static i0 RX context0 A10080");
+	con_hex("GPI RX0", rd(0xa10080UL));
+	con_str("GPI", "read static i0 event context0 A11000");
+	con_hex("GPI EV0", rd(0xa11000UL));
+#ifdef DIZI_INPUT_GPI_TOUCH_DETAIL
+	/* Only after probe07 established all three context0 registers readable. */
+	con_str("GPI", "read static i0 TX ring length A10004");
+	con_hex("GPI TX len", rd(0xa10004UL));
+	con_str("GPI", "read static i0 event ring length A11004");
+	con_hex("GPI EV len", rd(0xa11004UL));
+	con_str("GPI", "read static i0 TX scratch0 A10060");
+	con_hex("GPI TX scratch", rd(0xa10060UL));
+#endif
 #else
 	for (unsigned i = 1; i <= 5; i++) {
 		uintptr_t base = 0x9f0000UL + 0x4000u * i;
@@ -93,6 +111,54 @@ void dizi_input_diag(void)
 		con_hex2("GPI scratch", "tx=", rd(base + 0x20060), "rx=", rd(base + 0x200e0));
 		con_hex2("GPI status", "irq=", rd(base + 0x23080), "error=", rd(base + 0x23200));
 	}
+#endif
+#endif
+#ifdef DIZI_INPUT_SMMU_ID0
+	/* Architectural ID0 is read-only. Apps SMMU at 0x15000000 is confirmed
+	 * by live FDT; this separate EL1/Gunyah MMIO permission is unproven.
+	 * A data abort may be surfaced on the diagnostic framebuffer. */
+	con_str("SMMU", "single read apps_smmu ID0 PA15000020");
+	con_hex("SMMU ID0", rd(0x15000020UL));
+#ifdef DIZI_INPUT_SMMU_ID1
+	/* Only enable following successful physical probe09 ID0 read. */
+	con_str("SMMU", "read apps_smmu ID1 PA15000024");
+	con_hex("SMMU ID1", rd(0x15000024UL));
+#ifdef DIZI_INPUT_SMMU_SMR0
+	/* The first mapping slot read is staged independently of a full scan;
+	 * SMMU ID0/ID1 have been observed accessible, SMR pages have not. */
+	con_str("SMMU", "single read SMR[0] PA15000800");
+	con_hex("SMMU SMR0", rd(0x15000800UL));
+#ifdef DIZI_INPUT_SMMU_SCAN
+	/* ID0=4c017e7e => EXIDS=0, NUMSMRG=126; FDT overrides to 120.
+	 * For each of the two measured DMA stream IDs, match a valid SMR's
+	 * ID+MASK, then read only the corresponding S2CR. No other MMIO writes. */
+	unsigned valid = 0, hit_gpi = 0, hit_qup = 0;
+	for (unsigned i = 0; i < 120; ++i) {
+		if ((i & 15u) == 0u) con_hex("SMMU scan slot", i);
+		uint32_t smr = rd(0x15000800UL + 4u * i);
+		if (!(smr & 0x80000000u)) continue;
+		++valid;
+		uint32_t mask = (smr >> 16) & 0x7fffu;
+		uint32_t id = smr & 0x7fffu;
+		unsigned gpi = (((0x416u ^ id) & ~mask) & 0x7fffu) == 0;
+		unsigned qup = (((0x403u ^ id) & ~mask) & 0x7fffu) == 0;
+		if (!gpi && !qup) continue;
+		hit_gpi += gpi;
+		hit_qup += qup;
+		con_hex2("SMMU match", "slot=", i, "smr=", smr);
+		con_hex2("SMMU stream", "gpi=", gpi, "qup=", qup);
+		con_hex2("SMMU S2CR", "slot=", i, "s2cr=", rd(0x15000c00UL + 4u * i));
+	}
+	con_hex2("SMMU scan", "valid=", valid, "gpi=", hit_gpi);
+	con_hex("SMMU qup matches", hit_qup);
+#endif
+#endif
+#ifdef DIZI_INPUT_SMMU_SCR0
+	/* Read-only global control. Unlike IDx this register may be emulated
+	 * by Gunyah. No control bits are changed and no DMA is submitted. */
+	con_str("SMMU", "single read global sCR0 PA15000000");
+	con_hex("SMMU sCR0", rd(0x15000000UL));
+#endif
 #endif
 #endif
 #ifdef DIZI_INPUT_SPI_CLOCK

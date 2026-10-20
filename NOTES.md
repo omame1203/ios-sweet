@@ -13,6 +13,144 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **Hardware blocker resolved to SMMU routing, probe13 (2026-10-21):**
+  opt-in read-only apps_smmu global sCR0 probe from temporary image
+  `shim/out/dizi/shim-boot-input-probe13-smmu-scr0.img`, SHA-256
+  `9d7522a6e6145fdd158cea4f92fd2c794632aa092f53d799c8ca90a53ad051ce`;
+  fastboot send0.007s/boot0.344s. **sCR0 PA0x15000000 = 0x00270406**
+  (CLIENTPD bit0=0: clients enabled; USFCFG bit10=1: unmatched stream
+  generates fault; EXIDENABLE bit3=0). `logs/dizi-input-probe13.txt`
+  4749 bytes retrieved via USB, no exception. Combined with probe12's
+  bounded 120 SMR scan (6 valid; 0 matches for GPI SID0x416 or QUP
+  SID0x403), the observed apps SMMU configuration provides no usable
+  individually matching mappings for those native touchscreen streams and
+  is configured to fault unmatched streams. This is strong evidence that
+  blindly starting GPI DMA would fail; it is not proof about any alternate
+  firmware/hypervisor mediation or ownership outside this measured state.
+  **Do not issue GPI DMA, configure SMMU stream mappings or disable faults
+  without implementing the full translation ownership and recovery path.**
+  Future work: compare secure firmware/Gunyah stream ownership and develop
+  a correct XNU SMMU domain with two distinct IOVA maps, then GPII0 rings
+  and Novatek BOE SRAM firmware download. Physical touch remains UNVERIFIED.
+
+- **Physical SMMU probe12 read-only stream scan SUCCESS (2026-10-21):**
+  `shim/out/dizi/shim-boot-input-probe12-smmu-scan.img` SHA-256
+  `4c537b1605f051a1b66cae7c0cce2a6f83e4e092c0587af0daf219d52c26add4`,
+  fastboot send0.007s/boot0.345s. Read SMR[0..119] using previously
+  measured EXIDS=0, validity bit31, 15-bit stream IDs/masks, FDT cap120.
+  **Only 6 valid slots; ZERO matches for either GPI1 SID0x416 or QUP1
+  SID0x403**. No corresponding S2CR read was required. Complete USB log
+  `logs/dizi-input-probe12.txt` 5082 bytes and no observed exception.
+  Therefore there is **no active individually matching stream map** for
+  the intended Novatek DMA stream IDs in the measured hardware mapping
+  slots. This does NOT prove stream access is blocked: default/unmatched
+  behavior and global `sCR0.CLIENTPD`/`USFCFG` are not yet read, and Gunyah
+  can mediate SMMU operations. Next bounded read-only sCR0 at0x15000000;
+  no SMMU writes or DMA ring setup until the behavior is grounded.
+
+- **Physical apps SMMU probe11 SUCCESS (2026-10-21):** staged read of SMR[0]
+  following ID0/ID1. `shim/out/dizi/shim-boot-input-probe11-smmu-smr0.img`
+  SHA-256 `79a9327c79d8e0f7eab2d9eebd2513b03dadccc228727be89aca12934db0b529`.
+  Fastboot send0.007s/boot0.349s; PA0x15000800 returned **SMR[0]
+  `0x80000060`**, valid slot 0 with stream ID0x60, mask0. USB log saved
+  `logs/dizi-input-probe11.txt` 4744 bytes with no observed exception.
+  This proves access to the SMR mapping table page and that at least one
+  actual stream mapping exists. It does NOT identify GPI0x416 or QUP0x403,
+  S2CR type or context; next is bounded read-only scan of 120 FDT-defined
+  slots with EXIDS=0 and VALID bit31, S2CR read only for matching entries.
+
+- **Physical apps SMMU probe10 SUCCESS (2026-10-21):** the temporary
+  `shim/out/dizi/shim-boot-input-probe10-smmu-id1.img` SHA-256
+  `72dcd21f0b14f52371c90e0e84e39636a875303178b5a4f822596931bc2c1608`,
+  send0.007s/boot0.344s. **apps_smmu ID0=0x4c017e7e and ID1 @
+  PA0x15000024=`0x6000004d`**, both read without EL1 abort, full USB EP0
+  log saved `logs/dizi-input-probe10.txt` 4680 bytes. ID0 has SMS=1,
+  EXIDS=0, 126 hardware stream mapping groups; DT overrides to 120
+  mapping slots. ID1 confirms 4K register pages, 128 context-bank pages,
+  77 context banks. No stream mapping, S2CR/CB, SMMU bypass or DMA was
+  tested yet. Next staged SMMU read-only SMR[0] PA0x15000800, then a
+  bounded mapping-slot scan for SIDs GPI 0x416 and QUP 0x403 (no writes).
+
+- **Physical apps SMMU probe09 SUCCESS (2026-10-21):** opt-in read-only
+  `DIZI_INPUT_SMMU_ID0=1 DIZI_INPUT_DIAG=1` after previous GPII0 reads.
+  Temporary image `shim/out/dizi/shim-boot-input-probe09-smmu-id0.img`
+  SHA-256 `27948cf4ec150b8e1f4ca2e76e38d9485b7eb542b5d1c6e36ca9a41caa424f4f`.
+  Fastboot send0.007s/boot0.344s. **apps_smmu GR0 ID0 PA0x15000020
+  returned `0x4c017e7e` without EL1 data abort**; full USB log saved
+  `logs/dizi-input-probe09.txt` 4617 bytes. This is genuine static hardware
+  ID register accessibility, but does not establish permission to read
+  stream entries, configure contexts, issue ATOS or program DMA. ID1 then
+  separate, bounded stream matching are the next read-only stages.
+
+- **Physical GPII0 probe08 SUCCESS (2026-10-21):** built using opt-in
+  `DIZI_INPUT_GPI_TOUCH_DETAIL=1` in addition to probe07 flags. Temporary
+  boot `shim/out/dizi/shim-boot-input-probe08-gpi0-detail.img` SHA-256
+  `ce040795e9db4685b57ef19e7a24dac36ebc0a6a05fe8ace4ba01c725d6e22a0`,
+  fastboot send0.007s/boot0.347s. All prior static GPII0 context0 reads
+  still zero and accessible, plus **TX CH0 ring length @0xa10004=0, EV ring
+  length @0xa11004=0, TX CH0 scratch0 @0xa10060=0**. Read-only MMIO and
+  subsequent USB EP0 communication succeeded with complete log
+  `logs/dizi-input-probe08.txt` (5007 bytes), no observed data abort.
+  Six zero-valued registers support an unallocated/dormant GPII0 at boot,
+  not proof of DMA mapping, controller ownership, SMMU translation or
+  readiness for channel allocate/start commands. No GPI writes or DMA were
+  attempted. Keep all probe06/07/08 images and logs for regression evidence.
+
+- **Physical GPII0 probe07 SUCCESS (2026-10-21)**: temporary image
+  `shim/out/dizi/shim-boot-input-probe07-gpi0-state.img` SHA-256
+  `6eef4429f72dd98bca13ab5bac297d9241d3797d5af3b565dc081f1c5d85e964`,
+  fastboot send0.007s/boot0.344s. Extended read-only GPII0 context
+  inventory following successful probe06: **TX CH0_CTX0 `0xa10000=0`,
+  RX CH1_CTX0 `0xa10080=0`, EVENT0_CTX0 `0xa11000=0`**. All read without
+  data abort; full EP0 log saved to `logs/dizi-input-probe07.txt`, 4790
+  bytes. Existing SPI fw0x102, DMA1/FIFO disabled1, GIC/16K MMU and USB
+  device transport still succeeded. All-zero GPII0 config is consistent with
+  unallocated channel/event rings at this moment; it **does not** establish
+  Gunyah ownership, working DMA, channel interrupt handling, or validity
+  of the GPI1 0x416 and QUP1 0x403 SMMU IOVAs. Next: bounded read-only
+  ring length/scratch registers, then prove SMMU mappings before any GPI
+  ring start or Novatek firmware writes. Never treat a plain physical
+  allocation as a valid IOVA.
+
+- **Physical GPII0 probe06 SUCCESS (2026-10-21):** the saved diagnostic
+  `shim-boot-input-probe06-static-gpi0.img` SHA-256
+  `ea9246d3ff94ea2af0be6d11a04f4f5ccd6360173640fa2997feaff04dc73867`
+  was temporarily booted on fastboot (send0.007s/boot0.347s). Device-side
+  fixed-address ARM64 load of **static GPII0 TX CH0_CONTEXT0 PA 0x00a10000**
+  completed without data abort, returning `0x00000000`. Full log
+  `logs/dizi-input-probe06.txt` **4660 bytes** retrieved over EP0; device
+  first announced live DWC3 and then host successfully received the ring.
+  GIC, 30 virtual timer IRQs, 10 SGIs, 16K MMU and SE9 clock-vote readback
+  passed again, no crash. This proves only this one GPI register is readable
+  and returns zero at that instant. It does NOT prove GPII0 IRQ ownership,
+  channel/ring allocation, DMA or IOMMU accessibility. Preserve image/log.
+
+- **0100 macOS full-kernel integration CI SUCCESS:** after host tests and
+  commits `c1bebf4`, `24269ae`, `5feaa69`, pushed fork/pocopad-dizi at
+  `5feaa69fe3db662cd8d04a4686854e537992a84a` and dispatched xnu
+  workflow run **39457087335**:
+  https://github.com/omame1203/ios-sweet/actions/runs/39457087335 .
+  Job `build` completed successfully. Downloaded the `xnu-kernel` artifact
+  to ignored `xnu/out-0100/` and validated its `SHA256SUMS`: real Mach-O
+  64-bit ARM64 executable, 17,227,168 bytes, SHA-256
+  `987b96883cbff02c4cf15ff3edb7023a29fca1e529f7adec12fb4a99e75f842b`.
+  No 0100 hardware boot was performed; the current GPI DMA limitation would
+  cause its dizi touch path to fail closed until the necessary transport is
+  implemented. Do not start duplicate build or call this touch success.
+- **Verified publicly available matching Novatek BOE SRAM firmware** from
+  `Efeisot/android_vendor_xiaomi_dizi`, pinned upstream commit
+  `25fb7b93c780ab8296fa0ff61b5177626372ee2c`:
+  `proprietary/vendor/firmware/novatek_ts_fw_boe.bin` (245760 bytes).
+  Locally saved only in ignored `research/dizi-novatek-fw/`; SHA-256
+  `5f93847e664b752b1a2bb2214e89fac9ceff95617eae5fbc2baf0c21e007c142`;
+  git blob SHA-1 `0346a2ad5402be3f1733a4d24621171ff31c8bad` matches metadata.
+  Live saved panel-lockdown identity begins with `44` and Linux driver picks
+  BOE (CSOT is `53`). Structural checks found final NVT sector sentinel,
+  FW version0x12/complement0xed and valid ILM/DLM SRAM section bounds.
+  Linux downloads this firmware to touch SRAM on startup/resume, so retention
+  through fastboot is unproven; loading it from native iPadOS still requires
+  fully functional Novatek SPI over GPI DMA with correct dual-SMMU mappings.
+
 - **Patch0100 (commit `24269ae`): guarded dizi Novatek NT36532 SPI/HID
   implementation scaffold.** Adds fixed-address ARM64 SE9 MMIO helpers,
   bounded protocol operations, NT36532 chip/firmware handshake, 108-byte
