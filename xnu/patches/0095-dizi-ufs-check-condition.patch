@@ -1,0 +1,92 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -248,14 +248,55 @@
+ 	}
+ 
+ 	uint32_t ocs = utrd->dw2 & 0xff;
+-	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6] || ucd->resp[7]) {
++	uint32_t status = ucd->resp[7];
++	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6]) {
+ 		printf("SWEET UFS: command 0x%02x failed: ocs 0x%x upiu 0x%x response 0x%x status 0x%x\n",
+-		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], ucd->resp[7]);
++		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], status);
++		return EIO;
++	}
++	if (status == 0x02) {
++		printf("SWEET UFS: command 0x%02x check condition\n", cdb[0]);
++		return EAGAIN;
++	}
++	if (status) {
++		printf("SWEET UFS: command 0x%02x status 0x%x\n", cdb[0], status);
+ 		return EIO;
+ 	}
+ 	return 0;
+ }
+ 
++/* REQUEST SENSE fills the bounce buffer; never use it for a write retry. */
++static int
++ufs_request_sense(void)
++{
++	static const uint8_t cdb[6] = { 0x03, 0, 0, 0, 252, 0 };
++	int error = ufs_scsi(cdb, sizeof(cdb), 252, false);
++	if (!error) {
++		const uint8_t *s = (const uint8_t *)(su.dma + DMA_BOUNCE);
++		printf("SWEET UFS: sense 0x%02x/0x%02x/0x%02x key %u\n",
++		    s[0], s[12], s[13], s[2] & 0xf);
++	}
++	return error;
++}
++
++static int
++ufs_scsi_retry(const uint8_t *cdb, unsigned cdb_len, uint32_t len, bool write)
++{
++	int error = 0;
++	for (int i = 0; i < 5; i++) {
++		error = ufs_scsi(cdb, cdb_len, len, write);
++		if (error != EAGAIN) {
++			return error;
++		}
++		if (len && write) {
++			return error;
++		}
++		(void)ufs_request_sense();
++		delay(10);
++	}
++	return error;
++}
++
+ /* READ(10) of count device blocks at lba into the bounce buffer. */
+ static int
+ ufs_read_blocks(uint64_t lba, uint32_t count)
+@@ -268,7 +309,7 @@
+ 		(uint8_t)(lba >> 24), (uint8_t)(lba >> 16), (uint8_t)(lba >> 8), (uint8_t)lba,
+ 		0, (uint8_t)(count >> 8), (uint8_t)count, 0
+ 	};
+-	return ufs_scsi(cdb, sizeof(cdb), count * UFS_BLOCK, false);
++	return ufs_scsi_retry(cdb, sizeof(cdb), count * UFS_BLOCK, false);
+ }
+ 
+ /*
+@@ -296,7 +337,7 @@
+ ufs_sync_cache(void)
+ {
+ 	static const uint8_t cdb[10] = { 0x35 };       /* SYNCHRONIZE CACHE(10), whole LUN */
+-	return ufs_scsi(cdb, sizeof(cdb), 0, false);
++	return ufs_scsi_retry(cdb, sizeof(cdb), 0, false);
+ }
+ 
+ static int
+@@ -625,8 +666,11 @@
+ 	error = ufs_take_over_host();
+ 	if (!error) {
+ 		static const uint8_t tur[6] = { 0x00 };
+-		/* The first command after the bootloader may report a unit attention. */
+-		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {
++		/* A unit attention here must not hide a readable GPT. */
++		error = ufs_scsi_retry(tur, sizeof(tur), 0, false);
++		if (error) {
++			printf("SWEET UFS: test unit ready failed (%d), trying the GPT anyway\n", error);
++			error = 0;
+ 		}
+ 	}
+ 	if (!error) {
