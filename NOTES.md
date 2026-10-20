@@ -9,6 +9,22 @@ to erase Android does NOT apply here. No destructive flash is authorized.
 The actual objective is native **iPadOS**, using ios-sweet as reference;
 an iPhone-themed Android UI or emulator does not meet that objective.
 
+### Latest checkpoint
+
+- Initial port implementation commit: `c4d8f06` on branch `pocopad-dizi`.
+- Latest diagnostic SHA-256 (not hardware-booted):
+  `d2f562b9d55660ae18e1768c3924f92396d83795e6f4b131103a3358f6fd2b36`.
+- GitHub CLI device authorization was started with `GH_BROWSER=true gh auth
+  login --hostname github.com --git-protocol https --web --skip-ssh-key`.
+  Git credential-helper setup was declined; the browser was not auto-opened.
+  **Live auth exec session 37852** is polling for user authorization. The
+  one-time code was shown to the user; do not store auth codes/tokens here.
+  Poll that handle or `gh auth status` before starting another login.
+- Android sys.boot_completed=1 at the final check. Working image mounts were
+  all unmounted. Root image and final fsck/hash are complete as detailed below.
+- Full XNU build, native iPadOS boot and hardware diagnostic observation
+  remain unverified; the user goal is still active and incomplete.
+
 ### Verified and saved
 
 - Upstream base: `11da58bd050672960c0a83b5bef2176047eea479` (81 patches).
