@@ -13,6 +13,42 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **2026-10-21 LaunchServices wait isolated; targeted sampler trial active**:
+  photo `/home/steam/Downloads/PXL_20261020_145519851.jpg` shows a central
+  Apple logo and console text in the margins; photo alone cannot exclude
+  reflection. User has not confirmed a home/lock/setup screen. Do not
+  infer that `IOAcceleratorESLegacy -> none` is the blocker: the port
+  has CPU framebuffer presentation and actual full-screen swaps.
+  After user reset, read-only log-reader recovered
+  `logs/ipados-gui-saved.txt` (136810 bytes; SWEETLOG total `0x27194`).
+  Swaps 2..5 and samples 0..1 present; no panic in the tail.
+  Previous sample symbolication gives main-thread `__ulock_wait` ->
+  `_os_unfair_lock_lock_slow` -> `_LSContextInitCommon` -> LSApplicationRecord
+  from ControlCenterServices' CCSModuleRepository initialization.
+  A second thread is in synchronous XPC via
+  `__LAUNCH_SERVICES_IS_RESEEDING_ITS_DATABASE_AND_MAY_BLOCK` ->
+  `_LSCopyServerStore`. That narrows the next investigation to lsd's
+  database initialization/reply, not a demonstrated GPU failure.
+- Same 0097 kernel temporarily booted with additional
+  `sweetsample=SpringBoard,backboardd,lsd,launchservicesd,installd`;
+  all other GUI profile arguments preserved. Image
+  `shim/out/dizi/shim-boot-ipados0097-lsd.img`, SHA-256
+  `230bb8771a3ed5ff6203216accbe05043e86e74fba7c2d890eb549b74aa494a7`.
+  Embedded payload verified, shim tests passed; fastboot product dizi
+  checked, send/boot 0.379s/0.343s. First sample is 90 s after startup,
+  then every 120 s. Need user reset after enough time and log-reader
+  capture to inspect lsd/installd; do not mistake a currently booted
+  native kernel for a USB-accessible Android installation.
+- Host symbolication: official ipsw 3.1.739 extracted privately into
+  `../host-tools/ipsw/` with release SHA-256 verified. `dyld a2s` crashes
+  in its all-cache ObjC analysis with an implausible allocation; do not
+  retry this path. Working method: `dyld info --dylibs --json` for image
+  bases, then `dyld symaddr --image PATH` per relevant image, with nearest
+  symbols and the per-run shared-cache slide. Private helper
+  `research/ipad5/symbolicate-samples.py` and reports beside it. Root image
+  mounted READ-ONLY at `research/ipad5/verify-root-ro` during analysis;
+  unmount after the pending lsd symbolication. No Apple files tracked.
+
 - **Native iPadOS userland and framebuffer swaps now directly captured**:
   after the user's reset, the existing read-only UFS log-reader shim
   recovered `logs/ipados-userland-platform-saved.txt` (136810 bytes).
