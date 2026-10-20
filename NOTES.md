@@ -11,22 +11,42 @@ an iPhone-themed Android UI or emulator does not meet that objective.
 
 ### Latest checkpoint
 
+- **0097 native hardware trial in progress (USB disabled)**: CI
+  39437053376 succeeded at f845ef1 (8m16s). Kernel SHA-256
+  `5bd6a61275c28082c5e8afd55d7260c98e3b2a22c9d97fa21400c4feae96a1de`,
+  downloaded to `xnu/out-0097/`, matching its artifact SHA256SUMS.
+  `shim/out/dizi/payload-ufs-0097.bin` was packed with actual iPad ADT,
+  no ramdisk, `rd=ufsroot0 ufsrw=1 rootrw=1 dizihw=1 sweetusb=0
+  sweetearlyusb=0 sweetkeys=0 sweettouch=0 sweetlog=1 ufslogsecs=1`,
+  plus normal debug/watchdog arguments. Embedded payload was compared
+  byte-for-byte after boot-v4 packaging. Image
+  `shim/out/dizi/shim-boot-ufs0097.img`, SHA-256
+  `ff9b4888c010ee9370672e9a30dd06e56e4cd302a8cd2503c09cb292a4cd6087`.
+  Fastboot product checked dizi; send OKAY 0.379s / boot OKAY 0.345s. Awaiting screen
+  observation (ACTIVE ready, BSD root/HFS, launchd or next panic). No claim
+  of native mount/userland success yet. Persistent log reader fallback is
+  ready; do not reset a potentially running userland without observation.
+
+
 - **Read-only recovery of native console prepared:** optional
   `DIZI_UFS_LOG=1` with UFS diag/wake reads the existing SWEETLOG area at
   the end of userdata, validates header/version/4 MiB ring and exports at
   most 128 KiB through the shim USB log. No block writes. Image
   `shim/out/dizi/shim-boot-ufs-log-reader.img`, SHA-256
   `32a3a29b43b204edb1f7f17e8e749b9bcc460f8819f365cdec09ce0b9a8ce8b7`.
-  Built and USB protocol host tests passed; this new reader path has not
-  yet been hardware-tested. Native next boot should use `sweetlog=1
+  Built and USB protocol host tests passed. Hardware probe 03
+  (`logs/ufs-log-reader-probe-03.txt`, 5669 bytes) successfully read the
+  userdata tail and reported `XNU log: no saved console header`, as expected
+  before the first native boot with working UFS. Positive saved-log
+  reconstruction remains unverified. Native next boot should use `sweetlog=1
   ufslogsecs=1` so logs can survive a manual reset if USB fails. A panic
   before the first flush can still leave no saved log. Do not assert a
   new log exists without checking its header/sequence/content.
-- **0097 native build running**: CI 39437053376 at f845ef1,
+- **0097 native build (now completed)**: CI 39437053376 at f845ef1,
   https://github.com/omame1203/ios-sweet/actions/runs/39437053376 .
   Prior 0096 CI 39435889409 completed successfully in 7m12s. Its kernel
   artifact download (exec session 12940) completed; artifact in xnu/out-0096/. Do not cancel/restart a live build just for an observation
-  timeout. Native 0097 boot still pending. Tablet confirmed FASTBOOT after
+  timeout. Native 0097 trial is now recorded above. Tablet confirmed FASTBOOT after
   probe 02, so no manual reset was needed at this latest check.
 
 
