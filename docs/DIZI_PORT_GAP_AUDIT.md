@@ -188,3 +188,5 @@ to the CPU count without latency measurements.
 - **0115 native IONetworkingFamily blocker:** true IONetworkInterface unconditionally allocates a second BSD ifnet, while fake IONetworkController class collides at link; only a standalone fail-closed future migration planner passes host tests, not native functional integration.
 
 - **0116 LCD XNU integration:** default-disabled physical backlight ownership witness contract, wired into SweetFramebuffer black-frame request/completion; no trusted live witness/GPIO ownership/rail or DSI backend, thus no physical power toggle. Synthetic host tests + native ARM64 translation-unit check only. 0115 patch number reserved for rejected native networking migration (actual USB portable policy is not an XNU kext).
+
+- **0116 complete macOS link:** Actions `39474995905` success, SHA-256 `2f867e8b658ba76166d21deb0d8803ba843a16cb6ba84400973b77baa9090328`, 17,300,528-byte ARM64 Mach-O; still no live GPIO57/DSI power ownership, physical panel toggle or device validation.
