@@ -46,6 +46,15 @@ an iPhone-themed Android UI or emulator does not meet that objective.
     USB is the primary channel and pstore remains a best-effort fallback.
   - GitHub CLI is still unauthenticated, so no CI kernel build was run. A
     complete XNU link and native iPadOS boot remain the next objective.
+- **Patch 0084 (dizi XNU USB) prepared and compile-checked.** It selects the
+  SM7435 GCC offsets when the boot-arg `diziusb=1` is present
+  (GDSC `0x49004`, master/sleep/utmi/iface/aggre `0x49018/20/24/84/88`)
+  and skips the sweet QUSB2 PHY read; DWC3/QSCRATCH bases are unchanged.
+  The modified `bsd/dev/sweet_usb.c` compiles to a genuine arm64 Mach-O
+  object with the saved CI flags (`research/dizi-objs/bsd__dev__sweet_usb.c.o`).
+  The patch applies cleanly with `patch -p1` on the pre-edit file. It is not
+  CI-built or hardware-booted yet, and it only runs from sweet_ufs.c once the
+  dizi UFS root is up; a RAM-disk-only boot will not start it.
 
 - **2026-10-20 resumed after the prior pause, diagnostic boot 05**: the user
   explicitly asked to continue. Preserved all partitions and existing changes.
