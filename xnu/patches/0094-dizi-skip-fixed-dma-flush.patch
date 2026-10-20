@@ -1,0 +1,20 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -126,6 +126,16 @@
+ static void
+ ud_sync(uint32_t off, uint32_t len)
+ {
++	/*
++	 * The dizi fixed DMA buffer is IOVA 0xa8020000 mapped Device by
++	 * ml_io_map. That physical range is outside XNU's managed RAM, so
++	 * flushing by PA panics in phystokv_range. Device mappings are
++	 * uncached; keep only the ordering barrier.
++	 */
++	if (sweet_usb_dizi) {
++		__asm__ volatile("dsb sy" ::: "memory");
++		return;
++	}
+ 	flush_dcache64((addr64_t)(ud.dma_pa + off), len, TRUE);
+ }
+ 
