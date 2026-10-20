@@ -11,13 +11,14 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
+#include "bootlog.h"
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
 #define PSHOLD			0x0c264000UL
 
-#define GICD_BASE		0x17a00000UL
-#define GICR_BASE		0x17a60000UL
+#define GICD_BASE BOARD_GICD
+#define GICR_BASE BOARD_GICR
 #define GICR_SIZE		0x100000UL
 #define GICR_PE_SIZE		0x20000UL
 #define GICR_TYPER		0x08
@@ -30,8 +31,8 @@
 #define GICR_ISPENDR0		(GICR_SGI + 0x200)
 #define GICR_ISACTIVER0		(GICR_SGI + 0x300)
 #define GICR_ICFGR1		(GICR_SGI + 0xc04)
-#define VTIMER_INTID		19	/* DT: <GIC_PPI 3 ...>, not the usual 27 */
-#define PTIMER_INTID		18	/* DT: <GIC_PPI 2 ...> */
+#define VTIMER_INTID BOARD_VTIMER_INTID
+#define PTIMER_INTID BOARD_PTIMER_INTID
 #define SGI_INTID		1
 
 #define PSCI_VERSION		0x84000000UL
@@ -109,7 +110,9 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
 	__asm__ volatile("dsb sy" ::: "memory");
 	smc(PSCI_SYSTEM_RESET, 0, 0, 0);
+#ifndef BOARD_DIZI
 	wr32(PSHOLD, 0);
+#endif
 	for (;;)
 		__asm__ volatile("wfe");
 }
@@ -373,6 +376,38 @@ static uint32_t to_us(uint64_t ticks)
 void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
+	bootlog_init();
+#ifdef BOARD_DIZI
+	/* First prove the architectural assumptions. Do not run sweet's UFS,
+	 * RPMh, SPMI, USB or touchscreen probes on a different SoC. */
+	stage = "dizi architectural probe";
+	bootlog_puts("POCOPAD diagnostic entered EL1\n");
+	con_clear(RED);
+	con_str("SHIM", BOARD_NAME);
+	con_hex("DTB", dtb);
+	con_hex("EL", rsr("CurrentEL"));
+	con_hex("MPIDR", rsr("mpidr_el1"));
+	con_hex("MMFR0", rsr("id_aa64mmfr0_el1"));
+	con_hex("PFR0", rsr("id_aa64pfr0_el1"));
+	con_hex("CNTFRQ", rsr("cntfrq_el0"));
+	con_hex2("PSCI", "ver=", smc(PSCI_VERSION, 0, 0, 0), "smccc=", smc(SMCCC_VERSION, 0, 0, 0));
+	/* TGran16 differs from TGran4: 0 means unsupported; 1/2 support 16K. */
+	unsigned int tgran16 = (rsr("id_aa64mmfr0_el1") >> 20) & 15;
+	const char *dizi_why = (tgran16 == 1 || tgran16 == 2) ?
+	    loader_boot(dtb) : "16K granule unsupported; payload skipped";
+	con_str("LOADER", dizi_why);
+	test_gic();
+	if (tgran16 == 1 || tgran16 == 2) {
+		stage = "dizi 16K MMU";
+		int dizi_rc = mmu_enable(&mi);
+		con_hex2("MMU16K", "rc=", dizi_rc, "tables=", mi.n_l3);
+		con_hex("SCTLR", mi.sctlr_after);
+		con_hex("PAR img", mmu_probe((uintptr_t)shim_main));
+		con_hex("PAR fb", mmu_probe(FB_PHYS));
+	}
+	con_str("PROBE", "GIC probe completed; Android reboot in 20s");
+	reset(20);
+#endif
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";

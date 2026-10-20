@@ -1,0 +1,2 @@
+# Unified diff context preserves a space before original tabs and blank lines.
+xnu/patches/*.patch -whitespace

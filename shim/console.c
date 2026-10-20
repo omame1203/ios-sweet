@@ -4,6 +4,7 @@
  */
 #include "console.h"
 #include "font.h"
+#include "bootlog.h"
 
 #define SCALE		3
 #define CH_W		(8 * SCALE)
@@ -68,6 +69,10 @@ void con_skip(void)
 
 void con_str(const char *label, const char *s)
 {
+	bootlog_puts(label);
+	bootlog_puts(": ");
+	bootlog_puts(s);
+	bootlog_puts("\n");
 	put_str(0, label, YELLOW);
 	put_str(LABEL_COLS, s, WHITE);
 	row++;
@@ -83,15 +88,23 @@ void con_hex(const char *label, uint64_t v)
 void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint32_t vb)
 {
 	char buf[9];
+	bootlog_puts(label);
+	bootlog_puts(": ");
+	bootlog_puts(a);
 	int col = put_str(0, label, YELLOW);
 	col = col < LABEL_COLS ? LABEL_COLS : col + 1;
 	col = put_str(col, a, YELLOW);
 	fmt_hex(buf, va, 8);
+	bootlog_puts(buf);
 	col = put_str(col, buf, WHITE);
 	if (b) {
+		bootlog_puts(" ");
+		bootlog_puts(b);
 		col = put_str(col + 1, b, YELLOW);
 		fmt_hex(buf, vb, 8);
+		bootlog_puts(buf);
 		put_str(col, buf, WHITE);
 	}
+	bootlog_puts("\n");
 	row++;
 }

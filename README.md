@@ -1,5 +1,10 @@
 # ios-sweet
 
+This worktree contains an **in-progress POCO Pad (dizi / SM7435) iPadOS port**.
+See [POCOPAD.md](POCOPAD.md) and the current handoff at the top of [NOTES.md](NOTES.md).
+Native iPadOS boot on POCO Pad has **not** been verified. The original upstream
+README below describes the different `sweet` device.
+
 **Apple's iOS 16 running on a Redmi Note 10 Pro.**
 
 This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generation) to the Xiaomi Redmi Note 10 Pro (`sweet`, Qualcomm SM7150 / Snapdragon 732G). On top of it runs the **unmodified iOS 16.7.16 (20H392) userland of the iPhone X**: launchd, the system daemons, backboardd, SpringBoard and the stock apps.

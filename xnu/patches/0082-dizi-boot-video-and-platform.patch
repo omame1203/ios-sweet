@@ -1,0 +1,213 @@
+diff --git a/osfmk/arm64/genassym.c b/osfmk/arm64/genassym.c
+--- a/osfmk/arm64/genassym.c
++++ b/osfmk/arm64/genassym.c
+@@ -294,6 +294,9 @@
+ 	DECLARE("PAGE_MAX_SHIFT", PAGE_MAX_SHIFT);
+ 	DECLARE("PAGE_MAX_SIZE", PAGE_MAX_SIZE);
+ 
++	DECLARE("BA_VIDEO_BASE", offsetof(struct boot_args, Video.v_baseAddr));
++	DECLARE("BA_VIDEO_STRIDE", offsetof(struct boot_args, Video.v_rowBytes));
++	DECLARE("BA_VIDEO_HEIGHT", offsetof(struct boot_args, Video.v_height));
+ 	DECLARE("BA_VIRT_BASE", offsetof(struct boot_args, virtBase));
+ 	DECLARE("BA_PHYS_BASE", offsetof(struct boot_args, physBase));
+ 	DECLARE("BA_MEM_SIZE", offsetof(struct boot_args, memSize));
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -515,10 +515,13 @@
+ 
+ #if defined(SWEET)
+ 	/* Stage 0: white 64x32 band, no stack or page tables needed. */
+-	MOV64	x0, (0x9c000000 + 2368 * 4320)
++	ldr		x0, [x20, BA_VIDEO_BASE]
++	ldr		x4, [x20, BA_VIDEO_STRIDE]
++	ldr		x2, [x20, BA_VIDEO_HEIGHT]
++	sub		x2, x2, #32
++	madd	x0, x2, x4, x0
+ 	mov		w1, #-1
+ 	mov		x2, #32
+-	mov		x4, #4320
+ Lsweet_mark_row:
+ 	mov		x3, #64
+ 	mov		x5, x0
+@@ -683,10 +686,11 @@
+ 	 * Splash framebuffer: one 32MB Normal-NC block in the EXISTING V=P
+ 	 * L2 table. Both framebuffer and RAM use L1 index 0; another call to
+ 	 * create_bootstrap_mapping would replace the RAM L2 table.
+-	 * SWEET uses 16K pages and all bring-up RAM is below 4GB, so the first
+-	 * V=P L2 page is bootstrap_pagetables + 2*PGBYTES.
+-	 */
+-	MOV64	x10, 0x9c000000
++	 * Both boards keep the framebuffer and bring-up RAM in L1 index zero
++	 * (the first 64 GiB with 16K pages). Dizi DDR starts above 32 GiB.
++	 * Thus the first V=P L2 page is bootstrap_pagetables + 2*PGBYTES.
++	 */
++	ldr		x10, [x20, BA_VIDEO_BASE]
+ 	MOV64	x11, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITECOMB) | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_PNX | ARM_TTE_BLOCK_NX)
+ 	orr		x11, x11, x10
+ 	and		x12, x10, #(ARM_TT_L2_INDEX_MASK)
+diff --git a/osfmk/arm64/sweet_early.h b/osfmk/arm64/sweet_early.h
+--- a/osfmk/arm64/sweet_early.h
++++ b/osfmk/arm64/sweet_early.h
+@@ -7,6 +7,7 @@
+ #include <stdint.h>
+ 
+ #if defined(SWEET)
++void sweet_early_init(uint64_t base, uint64_t width, uint64_t height, uint64_t stride);
+ void sweet_early_mark(unsigned int stage, const char *label);
+ void sweet_early_putc(char c);
+ void sweet_early_panic(const char *fmt, va_list *args);
+diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -11,11 +11,12 @@
+ #include <stdint.h>
+ #include <kern/misc_protos.h>
+ 
+-static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9c000000;
++static volatile uint32_t *early_fb;
++static unsigned int early_width, early_height, early_stride;
+ #define EARLY_FB early_fb
+-#define EARLY_WIDTH 1080u
+-#define EARLY_HEIGHT 2400u
+-#define EARLY_STRIDE (4320u / 4)
++#define EARLY_WIDTH early_width
++#define EARLY_HEIGHT early_height
++#define EARLY_STRIDE early_stride
+ #define EARLY_SCALE 2u
+ #define EARLY_CELL_W (8u * EARLY_SCALE)
+ #define EARLY_CELL_H (16u * EARLY_SCALE)
+@@ -27,6 +28,24 @@
+ /* Initialized data must remain writable until disable, including panics. */
+ static unsigned int early_row, early_col;
+ static unsigned int early_started, early_disabled, early_panicking;
++
++void
++sweet_early_init(uint64_t base, uint64_t width, uint64_t height, uint64_t stride)
++{
++	/* The bootstrap maps a single 32 MiB framebuffer block. Validate before
++	 * using dimensions supplied by a different board's loader. */
++	if (base == 0 || (base & 0x1ffffff) != 0 || width < 1024 ||
++	    height < 64 || width > 8192 || height > 8192 ||
++	    stride < width * 4 || (stride & 3) || stride > 32768 ||
++	    stride * height > 0x2000000) {
++		early_disabled = 1;
++		return;
++	}
++	early_width = (unsigned int)width;
++	early_height = (unsigned int)height;
++	early_stride = (unsigned int)(stride / 4);
++	early_fb = (volatile uint32_t *)(uintptr_t)base;
++}
+ 
+ static void
+ sweet_early_clear_row(void)
+@@ -42,7 +61,7 @@
+ void
+ sweet_early_putc(char c)
+ {
+-	if (early_disabled) {
++	if (early_disabled || early_fb == NULL) {
+ 		return;
+ 	}
+ 	if (!early_started) {
+@@ -89,7 +108,7 @@
+ void
+ sweet_early_mark(unsigned int stage, const char *label)
+ {
+-	if (early_disabled || stage > 20) {
++	if (early_disabled || early_fb == NULL || stage > 20) {
+ 		return;
+ 	}
+ 	uint32_t color = 0xff00ff00u | ((stage & 7u) * 32u << 16);
+diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -347,6 +347,10 @@
+ 	DTEntry chosen = NULL;
+ 	unsigned int dt_entry_size = 0;
+ 
++#if defined(SWEET)
++	sweet_early_init(args->Video.v_baseAddr, args->Video.v_width,
++	    args->Video.v_height, args->Video.v_rowBytes);
++#endif
+ 	sweet_early_mark(1, "arm_init entered (MMU on)");
+ 
+ 	arm_setup_pre_sign();
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -1834,7 +1834,7 @@
+ #define SWEET_EARLY_FB_VA (VM_MIN_KERNEL_ADDRESS + ARM_TT_L2_SIZE)
+ 
+ static void
+-sweet_early_map_final(void)
++sweet_early_map_final(uint64_t framebuffer_pa)
+ {
+ 	const vm_map_address_t va = SWEET_EARLY_FB_VA;
+ 	assert(va + ARM_TT_L2_SIZE <= gVirtBase);
+@@ -1843,7 +1843,8 @@
+ 	tt_entry_t *l2 = (tt_entry_t *)phystokv(l1 & ARM_TTE_TABLE_MASK);
+ 	tt_entry_t *slot = &l2[(va & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT];
+ 	assert(*slot == ARM_TTE_EMPTY);
+-	*slot = 0x9c000000ULL | ARM_TTE_VALID | ARM_TTE_TYPE_BLOCK |
++	assert((framebuffer_pa & (ARM_TT_L2_SIZE - 1)) == 0);
++	*slot = framebuffer_pa | ARM_TTE_VALID | ARM_TTE_TYPE_BLOCK |
+ 	    ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) |
+ 	    ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITECOMB) |
+ 	    ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_PNX | ARM_TTE_BLOCK_NX;
+@@ -2181,7 +2182,7 @@
+ 
+ #if defined(SWEET)
+ 	/* phystokv() must still refer to the bootstrap aperture here. */
+-	sweet_early_map_final();
++	sweet_early_map_final(args->Video.v_baseAddr);
+ #endif
+ 	arm_vm_physmap_init(args);
+ 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -38,13 +38,13 @@
+     "   {"
+     "     'IOClass'         = SweetPlatformExpert;"
+     "     'IOProviderClass' = IOPlatformExpertDevice;"
+-    "     'IONameMatch'     = 'xiaomi,sweet';"
++    "     'IONameMatch'     = ('xiaomi,sweet', 'xiaomi,dizi');"
+     "     'IOProbeScore'    = 10000:32;"
+     "   },"
+     "   {"
+     "     'IOClass'         = SweetCPU;"
+     "     'IOProviderClass' = IOPlatformDevice;"
+-    "     'IONameMatch'     = 'qcom,kryo470';"
++    "     'IONameMatch'     = ('qcom,kryo470', 'dizi,cpu');"
+     "     'IOProbeScore'    = 10000:32;"
+     "   },"
+     "   {"
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -174,8 +174,21 @@
+ 		fLogicalW = SWEET_FB_LOGICAL_W;
+ 		fLogicalH = SWEET_FB_LOGICAL_H;
+ 	}
+-	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
+-	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
++	/* Use the Apple device's canvas, independently of the physical panel.
++	 * iPad6,11 is 1536x2048, centered on dizi's 1600x2560 splash surface. */
++	OSData *canvasW = OSDynamicCast(OSData, provider->getProperty("canvas-width"));
++	OSData *canvasH = OSDynamicCast(OSData, provider->getProperty("canvas-height"));
++	if (!native && canvasW && canvasH && canvasW->getLength() == 4 && canvasH->getLength() == 4) {
++		uint32_t w, h;
++		memcpy(&w, canvasW->getBytesNoCopy(), sizeof(w));
++		memcpy(&h, canvasH->getBytesNoCopy(), sizeof(h));
++		if (w > 0 && w <= 8192 && h > 0 && h <= 8192) {
++			fLogicalW = w;
++			fLogicalH = h;
++		}
++	}
++	fOffX = ((int32_t)fLogicalW - (int32_t)fWidth) / 2;
++	fOffY = ((int32_t)fLogicalH - (int32_t)fHeight) / 2;
+ 	fLock = IOLockAlloc();
+ 	fClients = OSArray::withCapacity(4);
+ 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);

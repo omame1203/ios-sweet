@@ -1,5 +1,141 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## POCO Pad port handoff (2026-10-20; applies to this worktree)
+
+This is a NEW target: POCO Pad 2405CPCFBG, codename `dizi`, SM7435.
+All older instructions/permissions/device paths below concern the upstream
+maintainer's **sweet**, not this tablet. In particular, the old permission
+to erase Android does NOT apply here. No destructive flash is authorized.
+The actual objective is native **iPadOS**, using ios-sweet as reference;
+an iPhone-themed Android UI or emulator does not meet that objective.
+
+### Verified and saved
+
+- Upstream base: `11da58bd050672960c0a83b5bef2176047eea479` (81 patches).
+- Rooted Android 16, Magisk `su` works, bootloader unlocked, active slot `_b`.
+- Google platform-tools: `../host-tools/platform-tools/{adb,fastboot}`.
+  Arch android-tools were also installed; initially their protobuf dependency
+  was too old, then protobuf was updated. Use the Google tools for consistency.
+- Read-only probe: `python3 tools/pocopad-probe.py --adb /home/steam/Desktop/pocopad/host-tools/platform-tools/adb --backup`.
+  `backup/dizi/` contains private live FDT, logs, inventory and 19 partition
+  backups (778436608 bytes), each compared to its on-device SHA-256. Both boot,
+  vendor_boot, recovery, dtbo, vbmeta, vbmeta_system and abl slots, plus persist,
+  modemst1/2, fsg and fsc. Never commit these files or device identifiers.
+- Public hardware facts: `boards/dizi.json`. GICD/R = 0x17200000/0x17260000;
+  virtual timer INTID 27, 19.2 MHz; MPIDRs 0x000..0x700; four A55 + four A78;
+  PSCI SMC. DDR includes banks above 32 GiB. Selected XNU interval
+  0x8c0000000 + 0xb0000000 is within a bank with no fixed reserved-memory overlap.
+- `python3 tools/check-dizi-board.py backup/dizi/fdt` checks these against the
+  actual private FDT. Splash reservation = 0xb8000000 + 0x2b00000;
+  panel modes say 1600x2560. 6400-byte stride and BGRA format still require
+  observation on a running shim; do not call them measured yet.
+- Touch is Novatek SPI at QUP SE9 0xa8c000, CS0, GPIO54, with pen support.
+  The upstream Goodix/I2C, RPMh, SPMI and USB implementations are NOT portable
+  just by changing addresses. Keep `sweettouch=0 sweetkeys=0 sweetusb=0
+  sweetlog=0 ufsrw=0` until the respective drivers are ported.
+
+### Implemented and checked
+
+- `BOARD=dizi bash shim/build.sh`: separate `shim/out/dizi/` images, boot-v4
+  format matching this device, existing vendor_boot untouched. The diagnostic
+  exercises architectural registers/GIC/16K MMU and resets via PSCI. No UFS
+  probe on dizi. Optional RAM-only ramoops console is at 0x80d80000.
+- First diagnostic (BEFORE loader-v4 validation changes) SHA-256:
+  `9ac2bca2863d8b88128156b9caf9016d925bac3fd67c33ac44ad112c4fb529e2`.
+  `adb reboot bootloader` then `fastboot boot`: Sending OKAY 0.006s,
+  Booting OKAY 0.345s. Android subsequently returned, sys.boot_completed=1.
+  This proves bootloader acceptance/return ONLY. No diagnostic marker was
+  recovered from pstore or /proc/last_kmsg; do not claim GIC/MMU success.
+  User was asked for the physical screen observation; answer still pending.
+  No second boot has been performed. New shim builds supersede that hash.
+  Post-boot boot_a/b and vendor_boot_a/b hashes match the initial backups.
+- The loader now finds a raw payload after a vendor-ramdisk prefix, supports
+  arbitrary source alignment, checks lengths/segments/entry/memory bounds,
+  zeros partial-word BSS tails and terminates the command line. Real C loader
+  tested with ASan+UBSan, 64 prefix alignments, BSS/ADT/boot-args verification,
+  and truncated/invalid segment fields: `gcc -O1 -Wall -Wextra -Werror
+  -DBOARD_DIZI -fsanitize=address,undefined shim/loader_test.c
+  -o shim/out/dizi/loader_test && shim/out/dizi/loader_test`.
+- Patch `0082-dizi-boot-video-and-platform.patch` makes the early XNU console
+  and mappings read Boot_Video, adds dizi platform/CPU matching, and reads
+  the logical canvas from ADT. It applies after upstream 0081.
+- Original CI buildtree (run 39158169212) downloaded via nightly.link to
+  `research/upstream/`; 0082 applied there; proposed sources also in
+  `research/dizi-xnu/`. No complete XNU binary built. Original generated
+  `.FLAGS` allow unit compilation without authenticated Actions logs.
+- `tools/xnu-buildtree-cc.py` compiled early console, arm_init, arm_vm_init,
+  genassym, start.s and KernelConfigTables.cpp to genuine arm64 Mach-O objects
+  in `research/dizi-objs/` using Clang 23, without builtin substitutes.
+  Local assym.s regenerated from genassym output (BA_VIDEO offsets 40/56/72).
+  C++ framebuffer passes syntax check ONLY with `--syntax-compat`: non-Apple
+  Clang lacks the allocator type builtins. That option cannot emit objects.
+- Swift 6.2 toolchain downloaded to `research/swift/`; it also lacks these
+  Apple builtins. Do not substitute syntax-mode fake allocator metadata in
+  a bootable kernel. The user was asked for `gh auth login` or Mac access;
+  `gh auth status` is currently unauthenticated. No remote repo was created,
+  no workflow dispatched, and no code pushed/published.
+
+### Actual iPadOS artifacts and remaining work
+
+- Apple iPadOS **16.7.16 / 20H392**, iPad6,11 (5th-gen iPad), J71sAP, A9
+  chip 0x8000. Device identity verified from Apple's BuildManifest and ADT;
+  matches the reference XNU generation and avoids arm64e/PAC.
+- Apple URL and download metadata in `research/ipad5-firmware.json` (private).
+  Three DMGs downloaded and ZIP CRC-checked via tools/remotezip.py:
+  OS `087-86634-044.dmg`, SystemOS `087-86624-047.dmg`, AppOS `087-86715-047.dmg`.
+  Real ADT `research/ipad5/j71sap.adt`, decoded with Apple's lzfse, built in
+  `research/lzfse/build/bin/`.
+- `python3 tools/mkadt.py shim/out/dizi/dizi-ipad5.adt --board dizi` embeds the
+  real iPad /product and uses correct identity, scale 2 and 1536x2048 canvas
+  centered on the 1600x2560 panel. ADT roundtrip, identity, RAM, MPIDRs and
+  timer properties checked. Existing sweet/QEMU interface retained. Fixed-seed
+  sweet-lowmem, sweet-highmem and QEMU ADTs match the original bytes exactly.
+- Host image tools now work: apfs-fuse built in `research/apfs-fuse/build/`
+  after adding missing `<cstdint>` to ApfsLib/PList.h for GCC16. hfsprogs
+  540.1.linux3 built locally under `research/hfsprogs-pkg/` using reviewed AUR
+  patches, all downloaded source/patch SHA-256 values matched the PKGBUILD.
+  Symlinks in `research/host-bin/{mkfs.hfsplus,fsck.hfsplus}`. Use CC="gcc -std=gnu17".
+- Host kernel lacked HFS+ support. The exact Linux 7.1.7 fs/hfsplus sources
+  were downloaded from cdn.kernel.org and built against installed matching
+  headers/Module.symvers with `make -C /lib/modules/7.1.7/build
+  M="$PWD/research/linux-source/linux-7.1.7/fs/hfsplus" CONFIG_HFSPLUS_FS=m CC=gcc modules`.
+  `sudo insmod .../hfsplus.ko` succeeded; /proc/filesystems now lists hfsplus.
+  This is host-side only. LLVM=1 was tried first and failed on GCC-only flags;
+  use GCC (not LLVM=1) with these kernel headers.
+- **Root image complete (host verification only):** `research/ipad5/ipados16-root.img`
+  (17179869184 bytes, 16 GiB sparse HFSX; about 11 GiB used).
+  Builder session 21901 and verification/hash session 82885 both finished
+  successfully. Initial fsck repaired filename normalization, then read-only
+  fsck passed; root tweaks applied, mounted read-back checked, unmounted,
+  final read-only fsck passed. SHA-256: `3151ac6b683b3b1cea1f1adbc8938141c64e660592fb4e25c89774821cf4bf07`.
+  `research/ipad5/root-verification.json` records actual Mach-O headers for
+  launchd, dyld, backboardd, SpringBoard and Preferences (all arm64 subtype 0),
+  shared-cache hardlinks, build version, ownership, containers and setup prefs.
+  `root-tweaks.log`, `mkroot.log`, `final-fsck.txt` contain the build evidence.
+  NO tablet partition was written. This is NOT proof that iPadOS boots.
+- No mobileactivationd data container exists before first boot, so the root
+  tweak's data-ark step was skipped (recorded warning). The native Hactivation
+  path/container creation is unverified. Do not claim activation/GUI success.
+- Root build command used local `research/host-bin` and apfs-fuse/build in PATH,
+  then `tools/mkiosroot.sh` with OS/SystemOS/AppOS DMGs above and size 16G.
+  `sudo python3 tools/sweet-root-tweaks.py` was applied to the mounted output.
+  All temporary APFS/HFS mounts were unmounted; old temporary symlinks may
+  remain under /tmp/tmp.Hb14l1B9K3, but nothing is mounted there now.
+- Root source SystemVersion.plist is 16.7.16 / 20H392. launchd is a genuine
+  arm64 Mach-O (cputype 0x100000c, subtype 0), consistent with non-PAC target.
+- Connected GitHub app can read the user's profile but does not expose fork,
+  repository creation or Actions dispatch tools. No ios-sweet/ios-pocopad repo
+  was found on the connected account. CLI `gh` still needs authentication.
+- Preserve Android and existing ESP/Windows partitions (sda22/sda23). The
+  tablet has a Windows partition ~94 GiB; it is NOT free scratch space.
+  An eventual root-image placement decision is still needed. Do not flash
+  userdata, Windows, ESP, bootloaders, recovery or calibration partitions.
+- Next: obtain a complete Apple-compiler XNU build; verify in QEMU with a minimal test root before
+  another hardware trial; obtain/verify diagnostic framebuffer observation;
+  then port Novatek SPI touch, PMIC keys and USB for this SoC. The native
+  iPadOS boot/GUI objective remains incomplete.
+
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<

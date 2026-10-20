@@ -1,0 +1,28 @@
+{
+  "board": "dizi",
+  "model": "POCO Pad 2405CPCFBG",
+  "soc": "SM7435",
+  "evidence": "Rooted Android 16 live FDT and sysfs, 2026-10-20",
+  "kernel_ram": ["0x8c0000000", "0xb0000000"],
+  "framebuffer": {
+    "base": "0xb8000000",
+    "reserved_size": "0x2b00000",
+    "width": 1600,
+    "height": 2560,
+    "stride": 6400,
+    "status": "Reservation and panel mode verified; splash stride/format awaiting diagnostic observation"
+  },
+  "gic": ["0x17200000", "0x10000", "0x17260000", "0x100000"],
+  "timer_frequency": 19200000,
+  "virtual_timer_intid": 27,
+  "physical_timer_intid": 30,
+  "cpu_mpidrs": [0, 256, 512, 768, 1024, 1280, 1536, 1792],
+  "little_cores": 4,
+  "cpu_max_hz": [1958400000, 2400000000],
+  "psci": "smc",
+  "ufs": ["0x1d84000", "0x3000"],
+  "touch": {"compatible": "novatek,NVT-ts-spi", "spi_base": "0xa8c000", "chip_select": 0, "irq_gpio": 54},
+  "ramoops_console": ["0x80d80000", "0x80000"],
+  "boot_header_version": 4,
+  "bringup_cmdline": "debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0 sweetkeys=0 sweettouch=0 sweetusb=0 sweetlog=0 ufsrw=0"
+}
