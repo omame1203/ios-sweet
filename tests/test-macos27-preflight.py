@@ -33,12 +33,16 @@ class Macos27PreflightTests(unittest.TestCase):
                                       'ProductBuildVersion': build}, fmt=fmt))
         return p
 
-    def kernel(self, major=26, cpu=preflight.ARM64, filetype=2):
+    def kernel(self, major=27, cpu=preflight.ARM64, filetype=2):
         p = self.root/'kernel'
         # Metadata-only synthetic Mach-O; NEVER a bootable kernel.
-        b = bytearray(256)
-        struct.pack_into('<4I',b,0,preflight.MACHO64,cpu,0,filetype)
-        b.extend(f'Darwin Kernel Version {major}.0.0: SYNTHETIC SOURCE TEST'.encode())
+        b = bytearray(1024)
+        struct.pack_into('<8I',b,0,preflight.MACHO64,cpu,0,filetype,2,360,0,0)
+        struct.pack_into('<II16s4Q4I',b,32,0x19,72,b'__TEXT',0x100000,1024,0,1024,5,5,0,0)
+        struct.pack_into('<4I',b,104,5,288,6,68)
+        struct.pack_into('<Q',b,104+16+32*8,0x100000+512)
+        version=f'Darwin Kernel Version {major}.0.0: SYNTHETIC SOURCE TEST'.encode()
+        b[512:512+len(version)]=version
         p.write_bytes(b)
         return p
 
@@ -54,7 +58,7 @@ class Macos27PreflightTests(unittest.TestCase):
     def test_mac_27_metadata_may_match_but_still_blocked(self):
         for fmt in (plistlib.FMT_XML,plistlib.FMT_BINARY):
             with self.subTest(format=fmt):
-                r = self.assess(plist=self.plist(fmt=fmt),kernel=self.kernel(major=26))
+                r = self.assess(plist=self.plist(fmt=fmt),kernel=self.kernel(major=27))
                 self.assertEqual(r['system_version']['status'],'identity_only')
                 self.assertEqual(r['kernel']['status'],'identity_only')
                 self.assertEqual(r['verdict'],'BLOCKED')
@@ -73,7 +77,7 @@ class Macos27PreflightTests(unittest.TestCase):
                 self.assertEqual(r['verdict'],'BLOCKED')
 
     def test_rejects_legacy_kernel_regardless_of_plist(self):
-        for k in (22,23,24,25,27):
+        for k in (22,23,24,25,26,28):
             self.assertEqual(self.assess(plist=self.plist(),kernel=self.kernel(k))['kernel']['status'],'rejected')
 
     def test_rejects_non_arm64_and_userspace_macho(self):

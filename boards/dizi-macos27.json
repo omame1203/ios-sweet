@@ -4,7 +4,7 @@
   "soc": "SM7435",
   "target_os": "macOS",
   "target_version_major": 27,
-  "expected_darwin_major": 26,
+  "expected_darwin_major": 27,
   "build_train_prefix": "26",
   "official_apple_device_supported": false,
   "root_filesystem": "APFS",

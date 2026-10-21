@@ -6,7 +6,8 @@
   iPadOS 16.7.16 GUI to **genuine macOS 27 Golden Gate** on Qualcomm POCO Pad
   `dizi` SM7435. Do NOT relabel the old SpringBoard or XNU as macOS27.
 - macOS 27.0.1 (Apple build `26A434`) is publicly released, Apple Silicon
-  Mac only; Darwin 26 required. Verified old `xnu/out-0120/kernel.development.sweet`
+  Mac only. The stock 26A434 kernels now prove **Darwin 27.0.0**, not the
+  earlier assumed Darwin26. Verified old `xnu/out-0120/kernel.development.sweet`
   binary contains `Darwin Kernel Version 22.6.0`, built against
   `xnu-8796.141.3` (macOS 13.5 era), NOT macOS 27. All existing 0099/0116/0120
   temporary boot images and iPadOS root remain untouched and useful as
@@ -21,7 +22,7 @@
   `distribution-macOS/macos-270/release.json` URL returned HTTP 404;
   `blacktop/darwin-xnu-build` build.sh currently lacks matching 27.0 case,
   and no Xcode27 macOS27 SDK is available in this local Linux workspace.
-  Exact matching xnu/Darwin26 source tag and ABI therefore remain unproven.
+  Exact matching published XNU source and portable ABI therefore remain unproven.
   Existing macOS13.5 GitHub workflow and 118 SWEET patches are NOT portable
   to macOS27 by changing `MACOS_VERSION` alone. No new Mac kernel compile or
   boot can truthfully be claimed.
@@ -31,6 +32,63 @@
   real desktop WindowServer/Adreno graphics and native input/IO. Work in a
   separate branch and scratch paths; never use synthetic entitlement or
   version spoofing as a substitute for functioning real macOS.
+
+### New actual macOS27 artifact checkpoint (2026-10-21)
+
+- Retrieved the genuine macOS **27.0.1 / 26A434** UniversalMac restore
+  BuildManifest and two original KernelCache components by HTTPS range
+  extraction from Apple CDN. Stored under ignored `research/macos27-26A434/`;
+  no complete IPSW downloaded and no device access performed. Both wrapped
+  components match their original BuildManifest **SHA-384** exactly.
+  This is manifest integrity, not independent IMG4 signature validation.
+- Both decompressed collections report **Darwin Kernel Version 27.0.0,
+  root:xnu-13432.1.9~1**. VMAPPLE `vma2`: 81,444,864-byte MH_FILESET,
+  216 embedded entries; T8103 `mac13g`: 122,945,536-byte MH_FILESET,
+  342 entries. Both are **arm64e**, have 16-KiB chained fixups format 8,
+  and cannot be passed through the old plain-arm64 SWEET loader.
+  Embedded entry segment offsets are relative to the entire KC. The old
+  64-MiB/standalone preflight incorrectly rejected the real inputs.
+- Corrected the target's Darwin **26 -> 27** assumption and added a bounded
+  `ports/macos27/kernel_collection.py` reader, connected to preflight. It
+  parses actual native kernel __TEXT/version, fileset headers, segment
+  mappings, ARM64 entry and fixup starts without changing any bytes or
+  stripping PAC. `--build-manifest`, `--wrapped-kernel`, `--component` check
+  original compressed KernelCache integrity separately from decompression.
+  Full artifact URLs/hashes and repeatable commands are in the migration doc.
+- Exact observed `xnu-13432.1.9` source remains unavailable from Apple OSS:
+  direct GitHub ref API, raw config/MasterVersion and Apple tarball returned
+  **404**; complete upstream tag/branch listings still end at xnu-12377.
+  The source tag is observed **in the binary**, not verified as published
+  source. Do not rebrand xnu-12377, assume its ABI matches or boot these KCs.
+  Next work: obtain actual matching XNU source/toolchain or establish a
+  viable native kernel route; stock arm64e/PAC plus VMAPPLE/platform/SMMU
+  differences remain unresolved. APFS System/Data/SSV, macOS userland,
+  WindowServer/Adreno and real input are also still required.
+
+- Further actual input progress: extracted and manifest-SHA384 matched
+  original `043-70833-687.dmg` **RestoreRamDisk** (373,293,083 bytes,
+  SHA256 `7fd982e07bae3c3a587688ee96808d171f10fda90f9f720a3c45dae6514a17e8`)
+  and 6,585-byte `DeviceTree.vma2macosap.im4p`. `ipsw img4 im4p extract`
+  unwraps the ramdisk into `restore-ramdisk.dmg`, a real APFS container.
+  Existing apfs-fuse mounted it **ro,nosuid,nodev**, with its files under
+  `/root/` in the image; inspected and unmounted afterwards. Copied actual
+  `SystemVersion.plist`, `/sbin/launchd`, `/usr/lib/dyld` into ignored
+  `research/macos27-26A434/restore-artifacts/`. Plist reports macOS27.0.1,
+  26A434, **ReleaseType Restore**. Both launchd/dyld have ARM64 fat slices
+  subtype `0x80000002` and `0x8000000c`; no plain ARM64_ALL slice was found.
+  Do not infer the meaning/compatibility of subtype12 from its name alone.
+  This is an offline Apple restore environment, **not** an installed desktop
+  System/Data group or native PID1 success. Full OS/SystemOS/SSV still absent.
+- `ipsw extract --sys-ver --remote` is explicitly unsupported; do not retry
+  that combination. The real plist was copied from the readonly APFS ramdisk.
+  Saved ignored `provenance.json` with source URL, exact tool/binary hashes,
+  original/decompressed component hashes and inspection results, plus
+  `preflight-vma2.json` (system identity + native kernel identity + manifest
+  digest match; still BLOCKED). No device command or OS execution occurred.
+- Validation: preflight 9 tests, new KC/manifest 7 tests (including both real
+  Apple KCs and malformed commands/ranges/fixup offsets), source audit 9,
+  storage 35, existing graphics ASan/UBSan/AArch64 and repository validator
+  all passed. Source/read-only tests do not establish native macOS operation.
 
 ## POCO Pad port handoff (2026-10-20; applies to this worktree)
 

@@ -8,12 +8,14 @@ iPadOS SpringBoard, or a macOS-looking XNU 22 binary. This document tracks
 unfinished technical work, not a successful macOS boot.
 
 Apple's published macOS 27.0.1 release/build is `26A434` (2026-09-28), and
-the 27.2 RC is `26B118` (2026-10-19). Darwin for this OS is version **26**.
+the 27.2 RC is `26B118` (2026-10-19). Actual stock **26A434** KCs report
+Darwin **27.0.0**, xnu-13432.1.9. The original Darwin26 assumption was wrong;
+the `26A` build train is not the Darwin kernel major version.
 Official reference pages:
 
 - https://support.apple.com/en-us/127255 (supported Apple Silicon Macs)
 - https://developer.apple.com/news/releases/?id=09282026c (27.0.1 build)
-- https://developer.apple.com/news/releases/?id=09212026a (27.2 RC build)
+- https://developer.apple.com/news/releases/?id=10192026c (27.2 RC build)
 - https://github.com/apple-oss-distributions/xnu (Apple OSS XNU releases)
 
 The POCO Pad uses Qualcomm SM7435 rather than Apple Silicon; it is **not an
@@ -49,13 +51,13 @@ from Apple OSS **xnu-8796.141.3 (macOS 13.5)** with SWEET patches; it is
    authenticated `SystemVersion.plist`, the correct ARM64 kernel collection,
    dyld shared caches and framework set; record vendor URLs, build IDs and
    SHA-256 hashes locally without committing any Apple binary or device IDs.
-3. Identify Apple OSS XNU source **actually matching Darwin 26**, paired
+3. Identify Apple OSS XNU source **actually matching the observed kernel**, paired
    libraries and appropriate macOS SDK/KDK. Rebase low-level SM7435 CPU,
    GIC, pmap, platform expert, device tree, UFS, framebuffer, HID and key
    code from the known-good 0120 port using the new sources. The existing
    118 patches are written against xnu-8796; they are *not* a ready-made
-   patch series for a Darwin 26 kernel. Old `macos_version=13.5` Actions
-   build success cannot be reused to claim a Darwin 26 build.
+   patch series for xnu-13432 / Darwin27. Old `macos_version=13.5` Actions
+   build success cannot be reused to claim a Darwin27 build.
 4. Build and validate a macOS 27-compatible boot/kernel-collection loader
    without bypassing Apple-signature provenance. The old shim payload layout
    assumes a standalone unslid Mach-O and does not support stock IMG4/KC
@@ -70,6 +72,83 @@ from Apple OSS **xnu-8796.141.3 (macOS 13.5)** with SWEET patches; it is
 7. First prove source compilation + host emulator checks + safe diagnostics.
    Only then consider non-destructive board-specific temporary boots,
    logging each outcome without changing Android/Apple recovery partitions.
+
+## Actual 26A434 inputs now obtained (2026-10-21)
+
+Apple CDN restore URL:
+https://updates.cdn-apple.com/2026FallFCS/59241290-5d51-4ca8-9df4-31624b9a4eac/UniversalMac_27.0.1_26A434_Restore.ipsw
+
+Only original manifests and two kernel components were range-extracted.
+Ignored local directory: `research/macos27-26A434/`. The 30-MiB top-level
+BuildManifest has SHA-256
+`2585e3bd35a2491773bdf8c40803e0b10aa6ed222a27c790b34d25b5fa6842af`.
+Both wrapped components match the manifest's SHA-384 digest. This links
+downloaded bytes to the supplied manifest; it is **not** independent IMG4
+signature or personalized boot-policy verification.
+
+| Component | Wrapped bytes / SHA-256 | Decompressed bytes / SHA-256 |
+|---|---|---|
+| `kernelcache.release.vma2` | 23,159,655 / `a18374a448e74e2582e643385170fe238c55d5db50502479164d099f42625b7d` | 81,444,864 / `ca55ea8c4c86170e870380ae5501b8b43adb2d2d3db28be4531b3040653be203` |
+| `kernelcache.release.mac13g` | 32,728,420 / `7c011c6a881c0e0494dd482e2549a14c7ff498a02b4d12c5f2f94cc268ead4a1` | 122,945,536 / `d196456a0809aca37bbf5918eb633cf8ada9000c48f4c0082ca8f61c86b2866b` |
+
+Both are arm64e **MH_FILESET** collections and contain the native kernel
+`Darwin Kernel Version 27.0.0`, `root:xnu-13432.1.9~1` (VMAPPLE / T8103).
+The VMAPPLE collection has 216 fileset entries, including AppleARMGIC,
+APFS, IOGraphicsFamily, IOSurface and AppleParavirtGPU providers. Those are
+Apple VM drivers, not a native Qualcomm Adreno/display/storage backend.
+T8103 has 342 entries and an additional `__DATA_SPTM` fixup segment.
+Both use format-8 chained starts and 16-KiB pages. Embedded Mach-O segment
+file offsets are collection-relative. No code or fixups were changed.
+
+Repeatable extraction (Linux `ipsw` v3.1.739; `kernel dec --output` is a
+DIRECTORY):
+
+```sh
+IPSW_URL=https://updates.cdn-apple.com/2026FallFCS/59241290-5d51-4ca8-9df4-31624b9a4eac/UniversalMac_27.0.1_26A434_Restore.ipsw
+../host-tools/ipsw/ipsw extract --remote --pattern '(^|/)(BuildManifest|Restore)\.plist$' \
+  --output research/macos27-26A434 "$IPSW_URL"
+../host-tools/ipsw/ipsw extract --remote --pattern '^kernelcache\.release\.(vma2|mac13g)$' \
+  --output research/macos27-26A434 "$IPSW_URL"
+../host-tools/ipsw/ipsw kernel dec \
+  research/macos27-26A434/26A434__MacOS/kernelcache.release.vma2 \
+  --output research/macos27-26A434/kernel.vma2.macho
+python3 tools/macos27-preflight.py --json \
+  --kernel research/macos27-26A434/kernel.vma2.macho/kernelcache.release.vma2.decompressed \
+  --build-manifest research/macos27-26A434/26A434__MacOS/BuildManifest.plist \
+  --wrapped-kernel research/macos27-26A434/26A434__MacOS/kernelcache.release.vma2 \
+  --component kernelcache.release.vma2
+# Expected: kernel identity_only, manifest digest_matched, exit 2 / BLOCKED.
+python3 tests/test-macos27-kernel-collection.py
+```
+
+`ports/macos27/kernel_collection.py` reads actual collection headers,
+bounded segments, embedded kernel __TEXT/version, executable entry and
+fixup starts. It never flattens filesets, strips authenticated pointers or
+generates a SWEET payload. Decompressed-to-original linking is explicitly
+separate from manifest digest verification; retain the extraction receipt.
+
+Public source probes for the **observed** xnu-13432.1.9 tag were also made:
+GitHub ref API, raw `config/MasterVersion` and Apple's tarball each returned
+404; the full upstream tag/branch listings contain no 13432 generation.
+This is a missing published source input, not an unknown binary version.
+The old macOS13.5 workflow cannot build this kernel. No stock collection
+was booted or repackaged, and no device/storage operation was performed.
+
+The same IPSW's **RestoreRamDisk** (`043-70833-687.dmg`, 373,293,083 bytes,
+SHA256 `7fd982e07bae3c3a587688ee96808d171f10fda90f9f720a3c45dae6514a17e8`)
+and VMAPPLE device tree were subsequently extracted and their original
+SHA-384 manifest entries matched. `ipsw img4 im4p extract` unwraps the
+ramdisk to a real APFS container. Host `apfs-fuse -o ro` mounted it with
+`ro,nosuid,nodev`; the files are under `/root/` inside the image. It has now
+been unmounted. Saved `restore-artifacts/SystemVersion.plist` says macOS
+27.0.1 / 26A434, **ReleaseType Restore**; actual launchd and dyld were also
+copied for offline ABI inspection. Their fat binaries contain subtypes
+`0x80000002` and `0x8000000c`, not a plain ARM64_ALL slice. No compatibility
+of subtype12 has been established. This restore environment is not a
+desktop System/Data volume group, and no Apple process was executed.
+`ipsw extract --sys-ver --remote` is unsupported; use the plist extracted
+from the readonly image. Private `provenance.json` records tool/source and
+component hashes; `preflight-vma2.json` records the combined checks.
 
 ## Available migration tools
 
@@ -97,7 +176,7 @@ python3 tests/test-macos27-graphics.py
 
 The kernel audit's real, public, read-only probe on 2026-10-21 showed
 `distribution-macOS/macos-270/release.json` unavailable (HTTP 404), no
-verified Darwin 26 XNU source tag, and `blacktop/darwin-xnu-build` lacking
+verified published Darwin27 XNU source tag, and `blacktop/darwin-xnu-build` lacking
 a macOS 27 case. The highest XNU tag it independently related to an Apple
 macOS manifest was `xnu-12377.121.6` from **macOS 26.5**, not macOS 27.
 It reports exactly which existing CPU/IOKit/VFS patches need rebasing;
@@ -124,12 +203,12 @@ read-only strict identity check:
 ```sh
 python3 tools/macos27-preflight.py --json \
   --system-version /path/to/real-macos-27/System/Library/CoreServices/SystemVersion.plist \
-  --kernel /path/to/verified-macos27-arm64-standalone-kernel
+  --kernel /path/to/decompressed-macos27-kernel-collection
 python3 tests/test-macos27-preflight.py
 ```
 
 The preflight intentionally exits with status **2 (BLOCKED)** even if a
-version plist and standalone Mach-O declare the expected 27/Darwin 26
+version plist and Mach-O declare the expected 27/Darwin27
 versions. Strings are not a hardware trust chain, and modern Apple Silicon
 kernel collections require a separate loader. This tool never boots or
 mutates storage and rejects the current XNU 22/iPadOS kernel.

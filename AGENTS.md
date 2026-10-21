@@ -21,7 +21,11 @@
   authorized selected temporary boots of the 0099, 0116 and 0120 experimental
   iPadOS images, and confirmed the 0116 GUI. This does **not** authorize
   destructive flashing or an arbitrary new OS boot. There is currently NO
-  verified Darwin26/macOS27 kernel, APFS root/SSV or boot chain. Keep macOS27
+  verified dizi-ported macOS27 kernel, APFS root/SSV or boot chain. Stock
+  26A434 KCs have now been downloaded and matched to their manifest; they
+  report Darwin **27.0.0**, xnu-13432.1.9, arm64e. The old Darwin26 assumption
+  was wrong. These stock collections are not compatible with our loader.
+  Keep macOS27
   work source-only until supported inputs are verified. Never relabel the old
   iPadOS kernel, use simulated DMA ownership, or claim a source-only check as
   real macOS boot success. Preserve all existing dizi images and original

@@ -321,7 +321,7 @@ def collect(repo: Path, target: str, release_bytes: bytes | None,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target', choices=tuple(BUILD_TARGETS), default='27.2')
+    parser.add_argument('--target', choices=tuple(BUILD_TARGETS), default='27.0.1')
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--release-json', type=Path, help='saved Apple release manifest')
     parser.add_argument('--xnu-refs', type=Path, help='saved git ls-remote --tags output')
