@@ -1,5 +1,87 @@
 # Renegade Project / EDK2 port to POCO Pad (`dizi`, SM7435)
 
+## 2026-10-21: native Android boot-entry code after black-screen report
+
+The first temporary command previously executed against a **raw EDK2 FD**
+returned Fastboot `Sending 'boot.img' OKAY / Booting OKAY`, but the user
+observed a black display with no UEFI Shell/console, and Fastboot still
+recognized the device afterward. This is **NOT a proven SEC/PrePi execution**:
+the raw FV had `_FVH` at +0x28, not the required Linux `ARM\x64` magic
+at +0x38. No persistent partition write occurred. This source-only follow-up
+**did not execute fastboot boot or flash again**.
+
+The new `DiziBootShim/DiziNativeEntry.{S,h,c,ld}` provides a **genuine**
+4,096-byte AArch64 Linux Image with an executable first-PC branch,
+`ARM\x64` at offset 56, image size 4,096, `flags=0xa` and
+position-independent register-only entry at +0x40. Its very first code
+reads DAIF and masks exceptions, validates physical DTB `x0` alignment,
+`x1..x3=0`, EL1, incoming DAIF IRQ/FIQ masking and disabled EL1 MMU and
+D-cache; it preserves original DTB `x0`. On any result it **parks with WFE**,
+with a reason in `x16`. The no-owner result is reason 12. This is a real
+machine-code *entry* but it is **not yet a UEFI-executing wrapper**.
+No stack or unowned memory is accessed in this path.
+
+The complementary new **real post-grant transfer** source
+`DiziBootShim/DiziSecTransfer.{c,h,S}` implements what must happen once
+the first-PC loader has **independently verified** the current-boot grant:
+
+1. Take a hardware-backed owner/EL2/XPU proof for the complete low-memory
+   16 MiB window, source initrd+DTB, current kernel-image allocation,
+   cache/execute permissions and quiesced DMA. This is **not** inferred
+   from the captured DTB, guest code, unlocked Fastboot or a self-declared flag.
+2. Locate the exact 4 MiB FV in a possibly prefixed GKI-v4 initrd; verify
+   FDT structure, live chosen initrd addresses, all source/destination
+   disjoint intervals, FV header/block map, SEC vector and exact SHA-256.
+3. Copy verified FV to `0x90000000`, check copied bytes, clean
+   D-cache to the PoC, invalidate I-cache to the PoU, execute barriers,
+   mask asynchronous interrupts and branch to the FV reset vector with
+   `x0=physical FDT`, `x1=x2=x3=0`.
+
+The whole memory-writing transfer is gated by **both**
+`DIZI_SEC_ENABLE=1` and `DIZI_SEC_TRUSTED_OWNER_IMPLEMENTED=1`,
+plus an actual independently authored `DiziSecGetTrustedRuntimeGrant`.
+No such owner provider is in this repository, so the default build
+always returns `DIZI_SEC_NO_OWNER` and **no read, copy or BR executes**.
+Deliberately enabling both macros without the real provider fails the
+actual AArch64 ELF link with
+`undefined reference to DiziSecGetTrustedRuntimeGrant`. This is
+intentional: simply turning on a macro cannot authorize physical writes.
+Even after a provider exists, a trusted pre-stack first-PC call/stack
+placement and the existing PrePi's first unguarded FDT/vector/stack writes
+must be proven safe before this path may be connected to the native Image.
+
+The new `tools/dizi-renegade-native-image.py` builds the actual
+`DiziNativeEntry.S` using AArch64 GNU assembler/linker/objcopy and
+independently checks its opcode/header layout, then stages an Android
+**GKI-v4 structured, explicitly NONBOOTABLE** image with the SHA-pinned
+genuine 4 MiB FD as a ramdisk payload. Unlike the previous raw-FD Fastboot
+attempt, it truly includes an Android-compatible native Image entry,
+but **its native entry deliberately parks** and does not invoke the
+post-grant transfer. It must NOT be passed to `fastboot boot` as UEFI.
+
+Most recent in-place/offline build of the strictly nonbootable native stage:
+`/tmp/dizi-renegade-gki-native-20261021-prime/dizi.NONBOOTABLE-STAGE.gki-v4`;
+4,202,496 bytes, SHA-256
+`b80d98f6913f1f13211533e30309b5aa4756f473ddbc5bcf16c13542e9ace9af`.
+Actual 4,096-byte native Image SHA-256
+`6b6cdb7a3bead908b6600a0cf8e38bc5aaf19948bfd85e1c5e2c805a54bb34dd`.
+Payload FD SHA-256
+`7bb217aebee2d79910ea9e9d2bb204cb6375a6d6bcb637fb9e7dd81cf2e78ec8`.
+The stage manifest explicitly sets `safe_to_boot=false` and
+`safe_to_flash=false`. Existing `VERIFIED_DIZI_WRAPPERS` remains empty.
+
+Host verification:
+
+```sh
+python3 tests/test-dizi-renegade-native-entry.py
+python3 tests/test-dizi-renegade-native-abi.py
+python3 tests/test-dizi-renegade-native-image.py
+python3 tests/test-dizi-renegade-sec-transfer.py
+```
+
+Source-backed detailed ABL/Android/Gunyah evidence and outstanding runtime
+owner requirements are in `docs/DIZI_RENEGADE_NATIVE_ENTRY_AUDIT.md`.
+
 ## 2026-10-21 follow-up: native boot prerequisites and source implementation
 
 Following the genuinely compiled 4-MiB SM7435 FD, additional dizi-specific

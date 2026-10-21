@@ -1,5 +1,45 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: GKI-v4 native Image + bounded EDK2 SEC transfer implementation
+
+- Following the earlier **raw FD** `fastboot boot` command's `Sending OKAY` /
+  `Booting OKAY`, the user observed a **persistent black screen**. This
+  did NOT prove Qualcomm PrePi/UEFI executed. The FD has `_FVH`, not the
+  ARM64 Image `ARM\x64` header at byte 56. This follow-up made **no
+  additional fastboot boot, flash, partition or device-memory writes**.
+- NEW `DiziBootShim/DiziNativeEntry.{S,c,h,ld}`: a genuine, independently
+  assembled and linked 4,096-byte AArch64 Linux Image containing `ARM\x64`,
+  a real B to a first-PC register-only validation path, masked interrupts,
+  DTB x0 alignment and x1..x3/EL1/SCTLR_EL1/MMU checks. It deliberately
+  parks at WFE for ANY outcome, retaining reason code x16=12 for unknown
+  physical owner. No untrusted RAM store or unsafe SEC jump.
+- NEW `DiziBootShim/DiziSecTransfer.{c,h,S}`: independently gated **real
+  post-trusted-grant FD pipeline** uses existing dizi FD SHA256 + FDT/initrd
+  planner, exact source/destination disjointness, 4MiB FV copy and byte
+  verify, D-cache clean PoC/I-cache invalidation PoU, DSB/ISB and AArch64
+  BR to the FV reset vector with preserved physical FDT x0. Default
+  returns DIZI_SEC_NO_OWNER without physical access; enabling the
+  compile-time owner path WITHOUT an independently implemented
+  `DiziSecGetTrustedRuntimeGrant` demonstrably FAILS the AArch64 ELF link.
+  This transfer is NOT YET connected to the first-PC image and is NOT
+  runnable on the actual device without current-boot ABL/Gunyah/XPU grant,
+  trusted early stack, and PrePi first-write safety.
+- NEW offline `tools/dizi-renegade-native-image.py` assembles the genuine
+  Image and packs it with the exact pinned 4MiB Renegade FD in a GKI header
+  v4 **NONBOOTABLE** stage file. 4,202,496-byte stage SHA256
+  `b80d98f6913f1f13211533e30309b5aa4756f473ddbc5bcf16c13542e9ace9af`
+  (in `/tmp/dizi-renegade-gki-native-20261021-prime/`). Image SHA256
+  `6b6cdb7a3bead908b6600a0cf8e38bc5aaf19948bfd85e1c5e2c805a54bb34dd`.
+  Actual installed `boot_a`, `vendor_boot_a`, `abl_a` and FDT were
+  independently audited. Manifest correctly says `safe_to_boot=false` and
+  `safe_to_flash=false`; not to be passed to fastboot. Original
+  `VERIFIED_DIZI_WRAPPERS` empty allowlist is unchanged.
+- Host suite: **all 19 Renegade test groups PASS** including 9 native
+  entry, 9 native ABI, 10 native image and 6 SEC transfer tests. Full
+  AArch64 SEC opt-in machine code has been disassembled, including the
+  real `dc cvac`, `ic ivau` and `br x16`. Detailed proof gaps are
+  in `docs/DIZI_RENEGADE_NATIVE_ENTRY_AUDIT.md`.
+
 ## 2026-10-21: Renegade UEFI follow-up — early entry, GOP, GIC/timer
 
 - Implemented offline, source-only **pre-SEC AArch64 first-instruction guard**,
