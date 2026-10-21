@@ -1,5 +1,21 @@
 # POCO Pad (dizi) → genuine macOS 27 Golden Gate migration
 
+### 2026-10-21: original XNU entry one-instruction experiment under source review
+
+The requested unrestricted jump into genuine 26A434 XNU remains unqualified:
+VMAPPLE's first branch enters an `OSLAR_EL1` system-register write, early
+`HVC #0` with x0=0xc1000000 prior to SCTLR, and authenticated ARM64e PAC
+fixups whose dizi hardware keys/ISA are unverified. The source-only experimental
+trampoline `shim/macos27_entry_experiment.{c,h,S}` would execute **only** the
+unchanged authentic first PC-relative `B +0x3bf0`, then trap on a private
+`BRK #0x4e27` inserted at the copied target (not in preserved Apple source).
+Host checks and AArch64 compilation confirm intended matching ESR/ELR logic,
+but they do not prove real-world RAM ownership, stage-2 execute rights or
+exception return behavior. Complementary FDT stage/guard and explicit-review
+packaging tools remain offline and default-disabled. **No actual XNU27
+instruction was executed on hardware during this development.** The user's
+verified prior red screen was shim/real-KC read-only metadata execution only.
+
 ### 2026-10-21: real-device diagnostic display confirmed by user photo
 
 The second `fastboot boot` transfer of the original 81,661,952-byte

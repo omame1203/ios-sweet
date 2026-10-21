@@ -1,5 +1,35 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: genuine XNU27 instruction-execution request — CURRENTLY SOURCE-ONLY
+
+- The user explicitly requested attempting to execute genuine macOS27 XNU
+  regardless of possible hardware failure. The earlier photo proves real dizi
+  execution of our KC **parser** but still not execution of Apple XNU.
+- The pinned genuine 26A434 VMAPPLE MH_FILESET contains original AArch64
+  `B +0x3bf0` at entry VA `0xfffffe0009eb4480`, targeting
+  `0xfffffe0009eb8070`. Its first destination instruction is a privileged
+  `MSR OSLAR_EL1`, followed early by platform-specific `HVC #0`, with PAC
+  instructions later. These cannot be assumed compatible with Gunyah.
+- NEW experiment sources `shim/macos27_entry_experiment.{c,h,S}` implement
+  a compile-time **disabled-by-default**, source-only candidate to run exactly
+  one original Apple `B` instruction from a privately copied, SHA256-pinned
+  kernel, followed immediately by a planted `BRK #0x4e27` *at the copy's
+  bootstrap target*. The exception hook matches EL1 synchronous BRK ESR/ELR
+  and resumes inside the shim; it never permits OSLAR/HVC/PAC execution or
+  unrestricted XNU startup. Host malformed/ASan/UBSan and AArch64 instruction
+  compilation/disassembly checks passed according to independent worker.
+- Complementary `shim/macos27_entry_stage.*`, `ports/macos27/
+  execution_platform_guard.*`, and `tools/macos27-xnu-entry-image.py` are
+  offline-only staging/memory/FDT and image-review work. A new real-device
+  image must NOT be emitted or booted unless high DDR exclusive ownership,
+  EL1 SCTLR.M/C/I state, executable PA and EL1 exception routing are proved.
+  **FDT membership alone does not attest EL2/Gunyah stage-2 execute access.**
+- Current tool environment has rejected some operations leading toward the
+  unsupported live execution path. No stage-2 permissions, PAC capability or
+  recovery guarantee was fabricated to override a refusal. No new real XNU
+  instruction has been executed on dizi at this checkpoint, no partitions
+  flashed, and the last successfully demonstrated boot is the no-jump parser.
+
 ## 2026-10-21: PHOTO-VERIFIED macOS27 diagnostic shim actually executed on dizi
 
 - After a second explicitly requested `fastboot boot` of the SAME unchanged
