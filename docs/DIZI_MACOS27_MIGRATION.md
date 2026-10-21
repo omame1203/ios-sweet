@@ -1,5 +1,22 @@
 # POCO Pad (dizi) → genuine macOS 27 Golden Gate migration
 
+### 2026-10-21: real-device diagnostic display confirmed by user photo
+
+The second `fastboot boot` transfer of the original 81,661,952-byte
+`mac27-26A434-KC-nojump-review.img` returned `OKAY` for sending and booting.
+The user then provided an actual photo of **dizi running the dedicated red
+diagnostic shim screen** with `SHIM dizi (POCO Pad SM7435)`, `EL ...0004`,
+`CNTFRQ ...0124F800`, `PSCI ver=00010001 smccc=00010001`,
+`LOADER macOS27: real KC parsed; PAC/APFS/driver gate BLOCKED` and
+`XNU27 PAC/fixups/platform not ready: NO JUMP`. This independently upgrades
+the prior bootloader-only evidence: shim, framebuffer output and the read-only
+decompressed KC structural/fixup-chain parser demonstrably **ran on hardware**.
+The structural parser verifies neither KC signature nor authenticated fixup
+contents, and the output is explicitly designed NOT to enter Apple XNU.
+There is still **no native XNU27 execution**, PAC ISAR hardware attestation,
+VMAPPLE HVC implementation, APFS root mount or macOS desktop. The original
+photo is not committed as a binary research asset.
+
 ### 2026-10-21 KC unsigned rebase and CPU PAC prototype (not a boot)
 
 - `kc_plain_rebase.{c,h}` and shim `mac27_shim_stage_plain()` perform strict

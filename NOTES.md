@@ -1,5 +1,35 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: PHOTO-VERIFIED macOS27 diagnostic shim actually executed on dizi
+
+- After a second explicitly requested `fastboot boot` of the SAME unchanged
+  `shim/out/dizi/mac27-26A434-KC-nojump-review.img`, Fastboot returned
+  `Sending boot.img (79748 KB) OKAY [1.825s]`, `Booting OKAY [0.344s]`,
+  total 2.219s. The user then supplied a photograph
+  `PXL_20261021_070804616.MP.jpg` of the live POCO Pad displaying the
+  diagnostic red screen. This advances the evidence from *bootloader command
+  accepted* to **real dizi shim execution, initialized framebuffer text and
+  completion of the read-only macOS27 KC metadata/fixup-chain validation**.
+  The photograph is conversation input, not copied into the repo.
+- Screen explicitly reads `SHIM dizi (POCO Pad SM7435)`, `EL ...0004`
+  (CurrentEL reports EL1), `CNTFRQ ...0124F800` (19.2 MHz),
+  `PSCI ver=00010001 smccc=00010001`,
+  `LOADER macOS27: real KC parsed; PAC/APFS/driver gate BLOCKED`, and
+  `XNU27 PAC/fixups/platform not ready: NO JUMP`. DTB/MPIDR/MMFR0/PFR0
+  diagnostic register values are also visible; they are *not* direct per-core
+  ID_AA64ISAR1_EL1/ISAR2_EL1 PAC evidence.
+- The LOADER message comes from `shim/macos27_kc_probe.c`: it requires
+  `mac27_kc_inspect_fixups()` structural success on bytes located in the
+  GKI initrd. It does NOT perform IMG4 signature trust, PAC re-signing,
+  `mac27_shim_stage_plain()`, XNU entrypoint execution or APFS mounting.
+  The final NO JUMP is the intended `shim/shim.c` safety branch and the
+  shim parks in WFE. **This is NOT yet a macOS27 native XNU boot.**
+- This image is diagnostic only, despite carrying genuine 26A434 raw
+  MH_FILESET as inert data. No flash or partition modifications occurred.
+  Preserve the known iPadOS 0116 image. Next implementation milestone is
+  verified PAC/EL1/EL2 and VMAPPLE HVC startup ABI/driver port, not assuming
+  success from a photographed text output.
+
 ### Continuation: host KC partial fixup integration and optional PAC probe (2026-10-21)
 
 - `ports/macos27/kc_plain_rebase.{c,h}` and `mac27_shim_stage_plain()` now
