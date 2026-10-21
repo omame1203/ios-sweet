@@ -1,5 +1,63 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: genuine XNU27 boot-attempt preparation, no-jump boundary
+
+- **Goal still native macOS27 on dizi, ultimately all hardware.** The user
+  proposed using the previous **iPadOS16/XNU22 GUI-successful** boot path to
+  attempt genuine macOS27 XNU. This is a different, still-incompatible
+  arm64e/Apple-platform kernel. **NO genuine XNU27 instruction was executed,
+  no device connected/booted/rebooted/flashed, and no boot.img was built.**
+- Verified offline 26A434 genuine VMAPPLE/mac13g ARM64e MH_FILESET layout and
+  implemented freestanding `ports/macos27/kc_loader.{c,h}` for owned-memory
+  segments/BSS and `kc_fixups.{c,h}` for read-only format-8 16KiB-page chain
+  traversal (including 4-byte-step page-straddling pointers, PAC bit and
+  cache levels). VMAPPLE: **689050** chain entries, **599964 PAC-auth**.
+  mac13g: **1013361** entries, **901819 PAC-auth**. **No pointer rebasing or
+  authentication/signing**; layout PASS is NOT executable/memory owner PASS.
+- Integrated shim source `shim/macos27_kc.{c,h}` for dizi owned-buffer KC
+  placement + reserved-range checks + ADT + macOS27 1152-byte bootargs.
+  `mac27_shim_stage()` validates before writes and *always* refuses native
+  execution; its host-test ADT is intentionally a placeholder, not a real
+  XNU27 device tree. `shim/macos27_kc_probe.{c,h}` accepts an unaligned
+  decompressed KC in bounded GKI initrd, inspects chains, returns BLOCKED.
+  Compile-time `DIZI_MACOS27_PREFLIGHT` in `shim/shim.c` switches only the
+  separate experimental build: it returns after a visible diagnostic and
+  `bootlog_sync` **before legacy loader jump, GIC/MMU/USB/UFS probing or
+  automatic reset**. The shim still writes framebuffer/ramoops and uses
+  existing diagnostics for architectural reads/PSCI version; it is not
+  completely side-effect free. Default iPadOS source route is unchanged.
+- `shim/build-macos27-preflight.sh` successfully produced a separate **40KB
+  AArch64 review-only ELF**, `shim/out/mac27-readonly-preflight-isRGNgJc/
+  mac27-preflight-only.elf` (not an Android Image/boot.img; directory is
+  scratch/ignored and contains object/disassembly evidence). Never pass it
+  to fastboot or treat it as a bootable macOS27 XNU image.
+- `python3 tests/test-macos27-shim.py` PASS Clang ASan/UBSan synthetic hostile
+  inputs and genuine 26A434 VMA2/mac13g KC plans; optional probe host fixture
+  tests include corrupted format8, decoy Mach-O magic, unaligned vendor
+  ramdisk prefix, truncation/oversize and missing FDT; AArch64 freestanding
+  objects and **full genuine shim preflight ELF linking with no undefined
+  symbols** PASS; compile-switch verifies legacy jump absent from macOS27
+  `shim_main` path. Existing kernel/bootargs tests previously passed.
+- Parallel modules implemented `ports/macos27/cpu_compat_gate.{c,h}`
+  (per-core true EL1 ISAR PAC provenance strict gate; saved Linux paca/pacg
+  **not** advertised), `storage_boot_gate.{c,h}` (real APFS NXSB structural
+  checks and separate, currently absent, cryptographic trust verification),
+  `iokit_resolver.{c,h}` and `iokit_metadata.py` (genuine 26A434 provider
+  personality matching; no actual driver attachment). Independent sanitizer,
+  AArch64, real saved image/metadata tests passed.
+- **Native entry still BLOCKED:** direct per-core PAC proof/keys/EL2 trap
+  state unavailable, format-8 authenticated rebases/signing NOT implemented,
+  VMAPPLE/T8103 Apple-specific platform IOKit drivers cannot bind dizi
+  Qualcomm hardware, no complete APFS System/Data/Preboot/SSV/SEP trust/root
+  or macOS27 GPU/WindowServer support. Native jump would produce an
+  uninformative fault/hang rather than validated macOS startup. The concrete
+  next milestone is offline runtime semantics + memory/platform attestation,
+  not forcing a new arbitrary fastboot boot.
+- Git remote branch `fork/pocopad-macos27`. Existing unrelated untracked
+  `.github/workflows/dizi-host.yml`, all ignored 19GB Apple artifacts,
+  Android data and iPadOS known-working images remain untouched. Existing
+  `xnu.yml` Actions is XNU22/macOS13.5 and is NOT a macOS27 compile job.
+
 ## NEW target: genuine macOS 27 Golden Gate on dizi (2026-10-21)
 
 - **User explicitly changed the target OS** from the previously successful

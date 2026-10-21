@@ -1,5 +1,56 @@
 # POCO Pad (dizi) → genuine macOS 27 Golden Gate migration
 
+## 2026-10-21: iPadOS boot-path reuse and genuine XNU27 no-jump preparation
+
+The established iPadOS16/XNU22 0116 dizi GUI boot is hardware-bringup
+evidence **only**, not proof that macOS27/XNU13432.1.9 runs. Its legacy shim
+searches a custom SWEETXNU flat payload, copies pre-relocated arm64 segments,
+populates 736-byte boot args, then branches to its entry. The genuine macOS27
+26A434 Apple ARM64e MH_FILESET instead requires pointer authentication,
+proper kernel-collection chained-fixup resolution, native provider linkage
+and new 1152-byte boot args. `shim/loader.c` must not be pointed directly at
+the decompressed KC or an IMG4-wrapped file.
+
+Concrete code now in the repo working tree:
+
+- `ports/macos27/kc_loader.{c,h}` copies genuine segment bytes and zero-fills
+  BSS into an explicitly caller-owned host window; no native boot authority.
+  `kc_fixups.{c,h}` traverses real format-8 16KiB-page chains with strictly
+  bounded pointer reads, including valid 64-bit accesses straddling a 16KiB
+  page boundary. Real offline vma2: 689050 chain entries (599964 auth), real
+  mac13g: 1013361 (901819 auth). Neither authenticates/resigns/rebases PAC.
+- `shim/macos27_kc.{c,h}` connects real KC structural staging, dizi RAM and
+  reservation constraints, ADT placement and `boot_args.c` 1152-byte layout.
+  It **always** marks the native jump disallowed. Unit test fixtures may use
+  a placeholder ADT to check offsets, not an Apple-valid dizi device tree.
+- `shim/macos27_kc_probe.{c,h}` and compile-time
+  `DIZI_MACOS27_PREFLIGHT` select an intentionally non-booting diagnostic
+  path; malformed/unmapped/unaligned inputs reject. This path returns to
+  `_start` WFE **without running the legacy kernel jump, GIC/MMU/USB/UFS
+  diagnostics or auto-reset**. It displays on the existing framebuffer and
+  updates ramoops, so is NOT literally zero-side-effect on hardware.
+  It was compiled and host tested only, **never deployed or executed on dizi**.
+- `shim/build-macos27-preflight.sh` builds a separate review-only ELF under
+  `shim/out/mac27-readonly-preflight-*`; it does not create an Android
+  boot.img, issue fastboot calls, touch device storage or require an Apple
+  kernel asset. `python3 tests/test-macos27-shim.py` runs Clang ASan/UBSan,
+  malformed GKI-vendor-prefix tests, real Apple KC parsing, and the full
+  AArch64 freestanding shim ELF linker. All passed offline.
+- `ports/macos27/cpu_compat_gate.*` denies a false PAC attestation (dizi
+  Android cpu.txt lacks paca/pacg; this is not a per-core ISAR observation),
+  `storage_boot_gate.*` separates real APFS structure from SSV/SEP trust,
+  and `iokit_resolver.*` rejects unsupported real 26A434 provider ABI.
+  Their source-only/sanitizer/cross-compile tests passed; **no APFS boot
+  provider, KC signature validation or IOKit driver attach** exists yet.
+
+**No actual macOS27 XNU entry transfer has occurred.** Safely attempting an
+actual jump still requires direct trusted PAC/arm64e capability and key/trap
+semantics, correctly authenticated KC fixups, platform initialization/ADT,
+memory-map ownership, and a compatible APFS root/SSV/Preboot/LocalPolicy
+chain. Neither Apple VMAPPLE nor T8103 bundled platform drivers provide
+native SM7435 UFS/GIC/Adreno/PMIC compatibility. The long-term target remains
+all hardware features, not a subset.
+
 ## Scope / observed evidence (2026-10-21)
 
 The target has changed from native **iPadOS 16.7.16** to native **macOS 27

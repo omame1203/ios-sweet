@@ -13,6 +13,9 @@
 #include "ufs.h"
 #include "bootlog.h"
 #include "usb_diag.h"
+#ifdef DIZI_MACOS27_PREFLIGHT
+#include "macos27_kc_probe.h"
+#endif
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -466,9 +469,30 @@ void shim_main(uint64_t dtb)
 	con_hex2("PSCI", "ver=", smc(PSCI_VERSION, 0, 0, 0), "smccc=", smc(SMCCC_VERSION, 0, 0, 0));
 	/* TGran16 differs from TGran4: 0 means unsupported; 1/2 support 16K. */
 	unsigned int tgran16 = (rsr("id_aa64mmfr0_el1") >> 20) & 15;
+#ifdef DIZI_MACOS27_PREFLIGHT
+	/* Dedicated read-only macOS27 KC probe. It deliberately has NO entry
+	 * transfer. The original iPadOS path is unchanged in default builds. */
+	const char *dizi_why = (tgran16 == 1 || tgran16 == 2) ?
+	    mac27_dizi_probe_dtb(dtb) : "16K granule unsupported; KC probe skipped";
+#else
 	const char *dizi_why = (tgran16 == 1 || tgran16 == 2) ?
 	    loader_boot(dtb) : "16K granule unsupported; payload skipped";
+#endif
 	con_str("LOADER", dizi_why);
+#ifdef DIZI_MACOS27_PREFLIGHT
+	/* 26A434 is not compatible with this Qualcomm boot environment yet.
+	 * A probe result MUST NOT fall through to existing GIC/MMU/USB/UFS
+	 * diagnostics or their automatic reset. In particular this path must
+	 * not reach the legacy XNU22 loader_boot() or its indirect jump.
+	 * _start parks in WFE after shim_main returns.  This diagnostic DOES
+	 * still draw to the already-initialized framebuffer/ramoops; it is not
+	 * an entirely side-effect-free hardware action. Never flash or boot
+	 * it without a separate safety review and explicit user authorization. */
+	stage = "macOS27 XNU entry blocked";
+	con_str("XNU27", "PAC/fixups/platform not ready: NO JUMP");
+	bootlog_sync();
+	return;
+#else
 	test_gic();
 	if (tgran16 == 1 || tgran16 == 2) {
 		stage = "dizi 16K MMU";
@@ -506,6 +530,7 @@ void shim_main(uint64_t dtb)
 	con_str("PROBE", "diagnostics finished");
 	/* Remote branch marker: 20 s on success, 25..50 s for early exits. */
 	reset(usb_rc ? 20 + 5 * usb_rc : 20);
+#endif /* !DIZI_MACOS27_PREFLIGHT */
 #endif
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
