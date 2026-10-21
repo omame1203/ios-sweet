@@ -24,3 +24,10 @@ FILE FREEFORM = a7778303-0c3d-44ea-93a2-e59ec2b696c7 {
   # True DXE driver built from source. Its DEPEX requires a real GOP and
   # checks the inherited physical framebuffer before printing via ConOut.
   INF Platform/Xiaomi/sm7435/DiziDiagDxe/DiziDiagDxe.inf
+
+  # No framebuffer clear or DXE dispatcher activation by default. Even if
+  # explicitly enabled here, C insists on a separate vetted ownership grant
+  # before installing GOP. Never include upstream SimpleFbDxe (ZeroMem).
+!if $(DIZI_ENABLE_SAFE_GOP) == TRUE
+!include Platform/Xiaomi/sm7435/DiziSafeGopDxe/DiziSafeGop.fdf.inc
+!endif

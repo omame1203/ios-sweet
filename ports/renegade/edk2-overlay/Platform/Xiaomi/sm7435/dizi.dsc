@@ -29,6 +29,8 @@
   SKUID_IDENTIFIER               = DEFAULT
   FLASH_DEFINITION               = Platform/Qualcomm/sm7435/sm7435.fdf
   DEVICE_DXE_FV_COMPONENTS       = Platform/Xiaomi/sm7435/dizi.fdf.inc
+  # Strictly opt-in developer switch. No grant provider is bundled.
+  DEFINE DIZI_ENABLE_SAFE_GOP = FALSE
 
 !include Platform/Qualcomm/sm7435/sm7435.dsc
 
@@ -68,3 +70,13 @@
 [Components.common]
   # Real EDK2 DXE driver, read-only GOP validation after SimpleFbDxe.
   Platform/Xiaomi/sm7435/DiziDiagDxe/DiziDiagDxe.inf
+
+  # Physically inherited scanout; no writes at install. This compiled
+  # opt-in alone is NOT sufficient: C entry requires separate
+  # DIZI_SAFE_GOP_GRANT_INTEGRATED=1 plus independent trusted grant protocol.
+!if $(DIZI_ENABLE_SAFE_GOP) == TRUE
+  Platform/Xiaomi/sm7435/DiziSafeGopDxe/DiziSafeGopDxe.inf {
+    <BuildOptions>
+      GCC:*_*_AARCH64_CC_FLAGS = -DDIZI_SAFE_GOP_ENABLE=1
+  }
+!endif

@@ -1,0 +1,30 @@
+## @file
+# POCO Pad dizi/SM7435 pre-SEC structural FDT audit + DENY-ONLY entry.
+# This INF is not linked into the current QcomPkg/PrePi.inf by default.
+# Any integration must route initial PC to DiziEarlyHandoffGuardEntry ahead
+# of the unmodified _ModuleEntryPoint and disassemble that actual boot FD.
+# The entry always parks, so this cannot boot Renegade UEFI as-is.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = DiziEarlyHandoffGuard
+  FILE_GUID = 2D5FF165-71B7-41B9-BE39-0C35E7435001
+  MODULE_TYPE = BASE
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS = DiziEarlyHandoffGuardLib
+
+[Sources]
+  DiziEarlyHandoffGuard.c
+
+[Sources.AARCH64]
+  DiziEarlyHandoffGuardEntry.S | GCC
+
+[Packages]
+  MdePkg/MdePkg.dec
+  Silicon/Qualcomm/sm7435/sm7435.dec
+  Silicon/Qualcomm/sm7435/Library/DiziEarlyHandoffGuard/DiziEarlyHandoffGuard.dec
+
+[LibraryClasses]
+  BaseLib
+  PlatformMemoryMapLib

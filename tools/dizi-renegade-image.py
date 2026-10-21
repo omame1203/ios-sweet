@@ -113,8 +113,17 @@ def check_uefi_fd(raw: bytes, *, expected_sha256: str, fd_base: int) -> dict:
     require(fd_base % 0x10000 == 0 and RAM_BASE <= fd_base and
             size <= RAM_BASE + RAM_SIZE - fd_base,
             "FD physical load base/size outside dizi candidate high RAM")
-    require(raw[:16] == b"\0" * 16 and raw[16:32] != b"\0" * 16,
-            "FD lacks expected UEFI firmware volume zero vector/GUID")
+    # Real AARCH64 GenFv patches the FVH ZeroVector's first word into
+    # B <SEC-entry>; bytes 4..15 remain zero. The previous parser required
+    # all 16 bytes zero and consequently rejected our genuine DEBUG GenFv FD.
+    # Pin/check the branch shape without mistaking it for a validated ABL
+    # Linux Image wrapper, runtime RAM grant or actual SEC execution.
+    reset = struct.unpack_from("<I", raw, 0)[0]
+    reset_target = (reset & 0x03FFFFFF) * 4
+    require((reset & 0xFC000000) == 0x14000000 and
+            72 <= reset_target < size and raw[4:16] == b"\0" * 12 and
+            raw[16:32] != b"\0" * 16,
+            "FD lacks valid GenFv AArch64 SEC branch/firmware volume GUID")
     fv_length = struct.unpack_from("<Q", raw, 32)[0]
     header_length = struct.unpack_from("<H", raw, 48)[0]
     require(raw[40:44] == b"_FVH" and raw[54] == 0 and raw[55] == 2,
@@ -142,7 +151,8 @@ def check_uefi_fd(raw: bytes, *, expected_sha256: str, fd_base: int) -> dict:
             "FD FV block map does not describe exact firmware extent")
     return {"sha256": sha(raw), "bytes": size, "fv_length": fv_length,
             "fv_header_length": header_length, "fv_revision": 2,
-            "fd_base_pa": hex(fd_base), "fv_offset": 0, "checksum_valid": True}
+            "fd_base_pa": hex(fd_base), "fv_offset": 0,
+            "sec_branch_target_offset": reset_target, "checksum_valid": True}
 
 
 def check_arm64_wrapper(raw: bytes, *, expected_sha256: str) -> dict:

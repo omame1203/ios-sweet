@@ -31,6 +31,9 @@ def make_fd() -> bytes:
     """Minimal FVH structural fixture: not a runnable EDK2 SEC/PrePi firmware."""
     fd = bytearray(b"\xff" * 0x10000)
     fd[:16] = b"\0" * 16
+    # Genuine TianoCore AARCH64 GenFv patches the first zero-vector word to
+    # a forward B to SEC. This synthetic fixture is NOT a functioning SEC.
+    struct.pack_into("<I", fd, 0, 0x14000020)
     fd[16:32] = bytes(range(1, 17))
     struct.pack_into("<Q", fd, 32, len(fd))
     fd[40:44] = b"_FVH"
@@ -214,6 +217,25 @@ class DiziRenegadeImageTests(unittest.TestCase):
             rgi.check_uefi_fd(self.raw_fd, expected_sha256=digest(self.raw_fd),
                              fd_base=rgi.RAM_BASE + rgi.RAM_SIZE)
         self.assert_no_output()
+
+    def test_genfv_aarch64_sec_reset_branch_must_be_bounded(self):
+        # GenFv genuinely patches reset word 0 into B SEC, but this alone
+        # does not establish a kernel Linux Image, MMU transition or owner.
+        status = rgi.check_uefi_fd(self.raw_fd,
+                                   expected_sha256=digest(self.raw_fd),
+                                   fd_base=rgi.RAM_BASE)
+        self.assertEqual(status['sec_branch_target_offset'], 0x80)
+        for offset, patch in ((0, struct.pack('<I', 0x14000000)),
+                              (0, struct.pack('<I', 0x14FFFFFF)),
+                              (0, struct.pack('<I', 0xD65F03C0)),
+                              (4, b'X')):
+            with self.subTest(offset=offset, patch=patch.hex()):
+                bad = bytearray(self.raw_fd)
+                bad[offset:offset + len(patch)] = patch
+                with self.assertRaisesRegex(rgi.Rejected, 'SEC branch'):
+                    rgi.check_uefi_fd(bytes(bad),
+                                      expected_sha256=digest(bad),
+                                      fd_base=rgi.RAM_BASE)
 
     def test_self_declared_contract_without_audited_binary_allowlist_fails_closed(self):
         with mock.patch.dict(rgi.VERIFIED_DIZI_WRAPPERS, {}, clear=True):

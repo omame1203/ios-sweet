@@ -110,7 +110,12 @@ class TestDiziRenegadeSilicon(unittest.TestCase):
         self.assertNotIn("0x9ffff000", self.text.lower())  # never donor EFI info
 
     def test_no_hardware_writes_in_silicon_source(self):
-        sources = list(SILICON.rglob("*.c"))
+        # The pre-SEC/PEI libraries must remain MMIO-free in all builds.
+        # New separately gated DXE device drivers have their own full-source
+        # default-disabled/owner-proof test; reject their accidental
+        # inclusion in the PrePi libraries instead of banning any source
+        # code that correctly implements an opt-in interrupt controller.
+        sources = list((SILICON / "Library").rglob("*.c"))
         self.assertGreaterEqual(len(sources), 4)
         bad = re.compile(r"\b(?:MmioWrite\w*|MmioRead\w*|SerialPortInitialize|"
                          r"RFSLocateAndProtectSharedArea|GICR_WAKER_CURRENT_CPU|"

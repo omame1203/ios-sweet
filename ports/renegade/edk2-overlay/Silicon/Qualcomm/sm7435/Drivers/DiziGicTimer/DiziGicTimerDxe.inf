@@ -1,0 +1,40 @@
+## @file
+# dizi CPU0 GICv3 PPI27 / architectural virtual timer, default HARD DISABLED.
+# Requires separately linked real GIC/EL2/ABL owner; never donor binaries.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = DiziGicTimerDxe
+  FILE_GUID                      = 80B6B1A9-7B62-43D6-8C9B-09A86C7E7435
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = DiziGicTimerDxeEntry
+
+[Sources]
+  DiziGicTimerPlan.h
+  DiziGicTimerPlan.c
+  DiziGicTimerDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  ArmPkg/ArmPkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  ArmLib
+  ArmGicLib
+  ArmGenericTimerCounterLib
+  BaseLib
+  IoLib
+  PcdLib
+
+[Protocols]
+  gEfiCpuArchProtocolGuid
+  gHardwareInterruptProtocolGuid
+  gEfiTimerArchProtocolGuid
+
+[Depex]
+  gEfiCpuArchProtocolGuid

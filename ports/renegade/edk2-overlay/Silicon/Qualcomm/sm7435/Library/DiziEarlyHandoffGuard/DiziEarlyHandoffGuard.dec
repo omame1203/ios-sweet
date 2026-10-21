@@ -1,0 +1,16 @@
+## @file
+# Local, isolated EDK2 package declaration for the DENY-ONLY early guard.
+# Its presence does not modify QcomPkg PrePi, DSC/FDF or the executable FD.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  DEC_SPECIFICATION = 0x0001001A
+  PACKAGE_NAME = DiziSm7435EarlyHandoffGuardPkg
+  PACKAGE_GUID = C56A9B32-74E2-4D56-8BE2-1EC87943E010
+  PACKAGE_VERSION = 0.1
+
+[Includes]
+  .
+
+[LibraryClasses]
+  DiziEarlyHandoffGuardLib|DiziEarlyHandoffGuard.h

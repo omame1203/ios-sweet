@@ -2,6 +2,7 @@
 """Non-device tests of isolated modern Renegade EDK2 integration workflow."""
 
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -98,10 +99,8 @@ class TestRenegadeOverlay(unittest.TestCase):
         # exactly where the real pinned upstream stores its compiled FD.
         dest = self.root / 'isolated'
         (dest / 'Common/edk2').mkdir(parents=True)
-        (dest / 'tools/BootShim').mkdir(parents=True)
         (dest / 'Common/edk2/edksetup.sh').write_text('')
-        (dest / 'tools/BootShim/Makefile').write_text('')
-        output = dest / 'workspace/Build/dizi/DEBUG_GCC5/FV/SM7435_UEFI.fd'
+        output = dest / 'verify-overlay/Build/dizi/DEBUG_GCC5/FV/SM7435_UEFI.fd'
         output.parent.mkdir(parents=True)
         fd = bytearray(0x00400000)
         fd[0x20:0x28] = len(fd).to_bytes(8, 'little')
@@ -112,7 +111,8 @@ class TestRenegadeOverlay(unittest.TestCase):
 
         def capture(*args, **kwargs):
             calls.append((args, kwargs))
-            return ''
+            return json.dumps({'firmware_generated': True, 'bootable': False,
+                               'firmware': str(output)})
 
         with mock.patch.object(m.shutil, 'which', return_value='/mock/gcc'), \
              mock.patch.object(m, 'command', side_effect=capture):
@@ -123,9 +123,11 @@ class TestRenegadeOverlay(unittest.TestCase):
         self.assertEqual(len(result['firmware']), 1)
         self.assertEqual(result['firmware'][0]['bytes'], len(fd))
         argv, kwargs = calls[0]
-        self.assertEqual(argv[:2], ('bash', './build.sh'))
-        self.assertIn('--skip-rootfs-gen', argv)
-        for dangerous in ('--boot', '--installer-zip', '--clean', '--distclean'):
+        self.assertEqual(argv[0], m.sys.executable)
+        self.assertTrue(str(argv[1]).endswith('/tools/dizi-renegade-cold-build.py'))
+        self.assertEqual(argv[-2:], ('--workspace-name', 'verify-overlay'))
+        for dangerous in ('--boot', '--installer-zip', '--clean', '--distclean',
+                          './build.sh'):
             self.assertNotIn(dangerous, argv)
         self.assertEqual(kwargs['cwd'], dest)
 

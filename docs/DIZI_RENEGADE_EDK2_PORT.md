@@ -1,5 +1,102 @@
 # Renegade Project / EDK2 port to POCO Pad (`dizi`, SM7435)
 
+## 2026-10-21 follow-up: native boot prerequisites and source implementation
+
+Following the genuinely compiled 4-MiB SM7435 FD, additional dizi-specific
+source and host validation were developed rather than changing the target
+back to the macOS27 shim. **An EDK2 UEFI boot has still NOT been observed on
+POCO Pad.** No flash or temporary EDK2 `fastboot boot` was performed.
+
+### Entry ABI and memory ownership
+
+`Silicon/Qualcomm/sm7435/Library/DiziEarlyHandoffGuard` now contains a
+freestanding AArch64 no-stack/no-memory-write **deny-only** entry symbol and
+bounded read-only source FDT checker. Actual upstream
+`QcomPkg/PrePi/ModuleEntryPoint.S` stores incoming `x0` to
+`PcdDeviceTreeStore`, writes its 2-KiB exception vectors and clears the SEC
+stack **before** entering C or the platform's trusted-memory admission
+function. The new guard deliberately parks instead of executing PrePi; it
+is not wired into the present FD as a functional UEFI loader. There is no
+independently observed ABL/Gunyah/XPU ownership grant allowing those writes
+to provisional physical addresses `0x90000000` through `0x91000000`.
+
+`Platform/Xiaomi/sm7435/DiziBootShim` contains a constrained GKI-v4/FDT/
+vendor-initrd/UEFI-FV planning and isolated-buffer-copy implementation,
+where its actual completion remains **layout-only, not execution authority**.
+The saved ABL and boot images do not establish how an independently relocated
+FD can safely be copied and jumped into from the running primary CPU under
+the real MMU/cache/stage-2 configuration. Reusing another device's BootShim
+or setting the packager allowlist without this evidence remains forbidden.
+
+### Display and interrupts
+
+`Platform/Xiaomi/sm7435/DiziSafeGopDxe` provides a source-level inherited
+1600x2560, stride-6400, BGRA8888 GOP implementation with bounded BLT
+operations. Unlike the generic upstream display module, it does **not**
+clear the framebuffer at driver entry. Board inclusion is controlled by
+`DIZI_ENABLE_SAFE_GOP` and defaults to `FALSE`; independent display mapping,
+EL2/XPU ownership and cache-lifetime grant integration are additionally
+required before it can install or write the GOP protocol. Current firmware
+has no trusted grant-protocol producer.
+
+`Silicon/Qualcomm/sm7435/Drivers/DiziGicTimer` contains a separately
+guarded GICv3/virtual-timer PPI27 configuration path and host state planner.
+It does not silently enable the generic ArmGicV3 driver, whose whole-controller
+initialization would interfere with unverified IRQ/Gunyah ownership. FDT
+observations of GICD, GICR and 19.2 MHz timing are not permission to write
+those registers. This driver remains excluded from the default firmware
+unless ownership is independently attested.
+
+### Reproducible build tooling
+
+`tools/dizi-renegade-cold-build.py` validates pinned upstream and **eight
+public submodule revisions**, byte-checks the complete staged board overlay,
+and performs an explicitly requested AArch64 DEBUG build in a new private
+workspace. It bypasses Renegade's upstream `build.sh` because that script
+may initialize proprietary submodules and construct a donor-style boot image.
+Output reports explicitly set `bootable=false`, and host-only negative tests
+cover refusing modified sources, missing public dependencies, occupied
+workspaces and incomplete firmware volumes. The first integration run of this
+new runner produced another genuine 4,194,304-byte SM7435 UEFI FD, SHA-256
+`16792d5cef480561f5832eb33e6f4f6c57fc9f7cc3c113e568c0fb38e505897e`,
+using the then-current source overlay and the separately pinned public stage.
+This is a **build artifact only**, not a firmware image approved for execution.
+
+**Final after all follow-up sources were stable:** a new cold build in
+`/tmp/dizi-edk2-msm-genuine-dizi-debug-20261021-w9/verify-final-20261021`
+used exactly **35 matching board-overlay files** and eight pinned public
+submodule revisions, produced a 4,194,304-byte `SM7435_UEFI.fd` with SHA-256
+`b17435878dda89ca1306e4ede6a8cd49523e943f6f5d543c008308081b63412b`.
+The build report explicitly records `bootable=false`,
+`runtime_ram_ownership_proven=false`, `prepi_entry_abi_proven=false`,
+`fastboot_performed=false`. The earlier diagnostic hashes above are not
+identical to this final source snapshot and must not be substituted.
+
+After a whitespace-only cleanup of the unlinked, guarded GKI planning source,
+another full cold build from all 35 current files produced
+`verify-commit-20261021/Build/dizi/DEBUG_GCC5/FV/SM7435_UEFI.fd`, size
+4,194,304 bytes, SHA-256
+`7bb217aebee2d79910ea9e9d2bb204cb6375a6d6bcb637fb9e7dd81cf2e78ec8`.
+Use this **last observed build** to identify the verification-stage artifact;
+repeated EDK2 builds can have different byte hashes due to build metadata,
+so a SHA identifies exactly one FD, not a universal immutable firmware ID.
+
+The strict GKI-v4 packager's FD parser now accepts a *real* TianoCore
+AArch64 GenFv reset-vector forward-branch (`B SEC`) with bounded target,
+while checking FV header checksum and block map. Its previous demand that
+all first 16 bytes be zero was wrong for actual AArch64 UEFI firmware. This
+fix **does not** grant the still-unverified high-RAM vs low-RAM address
+contract or allowlist any executable wrapper.
+
+Separately, an explicitly optional full public EDK2 firmware build with
+`DIZI_ENABLE_SAFE_GOP=TRUE` linked a real AArch64 PE32+ GOP DXE module;
+however, its runtime ownership-grant integration remains absent, and
+the default board DSC keeps the module excluded. A likewise separately
+compiled GIC/Timer DXE demonstrates a deliberately nonfunctional,
+default-denied driver. An attempt to activate the GIC timer without the
+external `DiziGicTimerGetTrustedGrant` owner implementation fails at link
+time, as intended.
+
 **Status, 2026-10-21: SM7435 EDK2 source port and isolated AArch64 DEBUG
 firmware build now exist; NO Renegade UEFI boot on the POCO Pad.**
 

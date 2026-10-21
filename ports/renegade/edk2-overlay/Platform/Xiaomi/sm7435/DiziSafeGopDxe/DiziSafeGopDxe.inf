@@ -1,0 +1,29 @@
+## @file
+# Source-only inherited display GOP. No DSI/PLL/panel/storage writes.
+# Standalone module builds in EDK2; board DSC/FDF must gate incorporation.
+# Production use ALSO requires an independently reviewed grant provider.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = DiziSafeGopDxe
+  FILE_GUID                      = BAA99A18-3D0C-4F39-97D4-4CC6B7647435
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = DiziSafeGopEntry
+
+[Sources]
+  DiziSafeGopDxe.c
+  DiziSafeGopBlt.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid
+
+[Depex]
+  TRUE

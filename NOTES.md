@@ -1,5 +1,45 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: Renegade UEFI follow-up — early entry, GOP, GIC/timer
+
+- Implemented offline, source-only **pre-SEC AArch64 first-instruction guard**,
+  saved real dizi FDT structural inspector, bounded GKI-v4/vendor-initrd/FV
+  transport planner, independent read-only FD copy and negative host tests.
+  The early guard ALWAYS parks; it is NOT wired to the real FD, and there is
+  still no separately attested ABL/Gunyah/EL2/XPU memory owner protocol to
+  allow pre-PI FDT/vector/stack writes. No working fastboot UEFI boot resulted.
+- Added genuine EDK2 inherited-display GraphicsOutputProtocol DXE with
+  bounded 1600x2560 BGRA8888 BLTs, 6400-byte stride, optional guarded build,
+  and no automatic framebuffer clear or unreviewed DSI/clock MMIO. Its
+  independently verified display grant-provider is ABSENT and default
+  `DIZI_ENABLE_SAFE_GOP=FALSE`; an optional fully linked AArch64 EFI/FV is
+  an inert build result, not proof of GOP activation on-device.
+- Added single-core virtual-timer PPI27/GICv3 source-only planning and
+  independently gated DXE. The full-controller ArmGicDxe and TimerDxe do
+  dangerous unreviewed GICD/GICR/other-PPI writes for this target, so none
+  is enabled by default. A real Gunyah/IRQ owner callback remains absent.
+- Added `tools/dizi-renegade-cold-build.py` to pin the upstream and eight
+  public submodule sources and run EDK2 directly in a NEW isolated `/tmp`
+  workspace without upstream build.sh's boot-image/proprietary dependency
+  pipeline. A default-source cold build generated a valid 4MiB firmware
+  container SHA256
+  `16792d5cef480561f5832eb33e6f4f6c57fc9f7cc3c113e568c0fb38e505897e`.
+  This binary is **NOT bootable/safe-to-deploy as-is**. Updated the strict
+  wrapper packager to recognize genuine TianoCore AArch64 GenFv's reset
+  `B SEC` instruction instead of wrongly demanding an all-zero FV prefix;
+  it STILL refuses unreviewed boot wrapper/FD address permissions and has
+  an empty allowlist. No flash/erase or hardware boot from this work.
+- The **final stable follow-up overlay (35 files)** was reproduced using
+  eight pinned OSS submodules in a fresh `/tmp` EDK2 workspace. Full
+  AArch64 cold FD size 4,194,304 bytes, SHA256
+  `b17435878dda89ca1306e4ede6a8cd49523e943f6f5d543c008308081b63412b`.
+  This newer artifact supersedes the intermediate 16792d5c... source
+  snapshot; both are compile-only FD containers, not bootable GKI images.
+  A subsequent source-byte-matched cold build after cosmetic whitespace
+  cleanup produced `verify-commit-20261021` FD SHA256
+  `7bb217aebee2d79910ea9e9d2bb204cb6375a6d6bcb637fb9e7dd81cf2e78ec8`;
+  this is the latest observed FD. Build hashes can change with build metadata.
+
 ## 2026-10-21: Native Renegade EDK2/UEFI source port and REAL DEBUG FD build
 
 - The user's current priority is **Renegade Project's UEFI itself executing

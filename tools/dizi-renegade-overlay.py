@@ -3,8 +3,9 @@
 
 Never edit the user's edk2 checkout, any existing source, or a device.
 Default mode is an audit; --prepare clones the exact upstream git HEAD into a
-NEW destination and adds only the bounded dizi overlay. --build additionally
-attempts a native EDK2 build in the new copy (never --boot/--clean/--flash).
+NEW destination and adds only the bounded dizi overlay. --build runs the
+independent PUBLIC-source-only EDK2 cold build tool in the new copy after
+all pinned public submodules have been explicitly populated.
 No claim that successfully producing an FD makes it safe for fastboot boot.
 """
 
@@ -141,25 +142,25 @@ def prepare(source: Path, overlay: Path, destination: Path) -> dict:
 def build(destination: Path, report: dict) -> dict:
     if not (destination / 'Common/edk2/edksetup.sh').is_file():
         raise NotReady('EDK2 submodules not yet initialized in isolated workspace')
-    if not (destination / 'tools/BootShim/Makefile').is_file():
-        raise NotReady('Renegade BootShim source missing from isolated workspace')
     if not shutil.which('aarch64-linux-gnu-gcc'):
         raise NotReady('AARCH64 GCC cross compiler is missing')
-    env = dict(os.environ)
-    env['GCC5_AARCH64_PREFIX'] = 'aarch64-linux-gnu-'
-    # --boot, --installer-zip, --clean and --distclean are never invoked.
-    # The SimpleInit rootfs requires a separate runtime compatibility audit;
-    # do not implicitly build/pack one as part of a firmware compilation.
-    command('bash', './build.sh', '--device', 'dizi', '--release', 'DEBUG',
-            '--toolchain', 'GCC5', '--skip-rootfs-gen', cwd=destination, env=env)
-    # Renegade build.sh sets OUTDIR=$PWD and WORKSPACE=$OUTDIR/workspace;
-    # this tool runs it from the new destination. The direct EDK2 debug audit
-    # uses a different WORKSPACE (its root), so its output path is different.
-    # The FD filename preserves DSC SOC_PLATFORM=SM7435 case.
-    firmware = sorted((destination / 'workspace/Build/dizi').glob(
-        '**/FV/SM7435_UEFI.fd'))
-    if not firmware:
-        raise NotReady('EDK2 returned success but workspace/Build/dizi/**/FV/SM7435_UEFI.fd is absent')
+    # build.sh calls submodule auto-initialization, kernel gzip/mkbootimg and
+    # can exercise BootShim with donor PA. It is unsafe for this dizi audit.
+    # The checked helper invokes ONLY the actual edk2 BaseTools "build"
+    # executable with diagnostic FD values, not the Renegade boot pipeline.
+    result = command(sys.executable, str(ROOT / 'tools/dizi-renegade-cold-build.py'),
+                     '--stage', str(destination), '--build',
+                     '--workspace-name', 'verify-overlay', cwd=destination)
+    try:
+        built = json.loads(result)
+    except (ValueError, TypeError) as exc:
+        raise NotReady('genuine EDK2 tool returned no valid build report') from exc
+    if not isinstance(built, dict) or built.get('bootable') is not False or \
+            built.get('firmware_generated') is not True:
+        raise NotReady('genuine EDK2 did not produce a nonbootable FD report')
+    firmware = [destination / 'verify-overlay/Build/dizi/DEBUG_GCC5/FV/SM7435_UEFI.fd']
+    if str(firmware[0]) != built.get('firmware'):
+        raise NotReady('genuine EDK2 FD output path differs from pinned build contract')
     for p in firmware:
         data = p.read_bytes()
         # The physical layout is a *provisional* 4 MiB FV. Validate at least
