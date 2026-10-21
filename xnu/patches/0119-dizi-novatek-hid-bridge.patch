@@ -1,0 +1,406 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -20,6 +20,10 @@
+ extern kern_return_t thread_terminate(thread_t);
+ extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
++/* Returns false unless existing 0100 verified physical SPI/firmware and
++ * 0099 already registered its genuine IOHIDEventService. No device writes. */
++extern bool dizi_nvt_hid_frame(uint32_t mask, const int *x, const int *y,
++    uint64_t sequence, bool verified_spi_report, bool cancel);
+ void sweet_touch_init(void);
+ 
+ #define TOUCH_SE_PA      0x00a84000u
+@@ -666,6 +670,9 @@
+ 	uint32_t active;
+ 	int x[DIZI_TOUCH_MAX], y[DIZI_TOUCH_MAX];
+ 	bool dead;
++    bool hid_bridge; /* explicit dizinovatekhid=1; no new SPI initialization */
++    bool hid_verified; /* set only AFTER 0100 physical trim/firmware handshake */
++    uint64_t hid_sequence; /* local ordering; NOT a hardware timestamp */
+ } dzt;
+ 
+ static uint32_t
+@@ -700,11 +707,21 @@
+ static void
+ dz_release(void)
+ {
+-	for (unsigned id = 0; id < DIZI_TOUCH_MAX; ++id) {
+-		if (dzt.active & (1u << id))
+-			sweet_hid_touch(id, 0, dzt.x[id], dzt.y[id]);
+-	}
+-	dzt.active = 0;
++    if (dzt.hid_bridge) {
++        /* On transport loss send only the up contacts that originated in
++         * verified physical reports; no synthetic down if SPI never worked. */
++        if (dzt.active && dzt.hid_verified) {
++            int x[DIZI_TOUCH_MAX] = {0}, y[DIZI_TOUCH_MAX] = {0};
++            (void)dizi_nvt_hid_frame(0, x, y, ++dzt.hid_sequence, false, true);
++        }
++    } else {
++        for (unsigned id = 0; id < DIZI_TOUCH_MAX; ++id) {
++            if (dzt.active & (1u << id))
++                sweet_hid_touch(id, 0, dzt.x[id], dzt.y[id]);
++        }
++    }
++    dzt.active = 0;
++    dzt.hid_verified = false;
+ }
+ 
+ /* MiCode super-resolution frame: header [0], ten records of six bytes,
+@@ -740,9 +757,25 @@
+ 	return true;
+ }
+ 
+-static void
++static bool
+ dz_publish(uint32_t mask, const int *x, const int *y)
+ {
++    if (dzt.hid_bridge) {
++        /* Called ONLY after dz_nvt_read and checksum-valid dz_parse. Send
++         * ONE coherent frame to the existing HID service, not ten partial
++         * finger collections. Failed event registration is fail-closed. */
++        if (!dzt.hid_verified || dzt.dead ||
++            !dizi_nvt_hid_frame(mask, x, y, ++dzt.hid_sequence, true, false))
++            return false;
++        for (unsigned i = 0; i < DIZI_TOUCH_MAX; ++i) {
++            if (mask & (1u << i)) {
++                dzt.x[i] = x[i];
++                dzt.y[i] = y[i];
++            }
++        }
++        dzt.active = mask;
++        return true;
++    }
+ 	for (unsigned i = 0; i < DIZI_TOUCH_MAX; ++i) {
+ 		uint32_t bit = 1u << i;
+ 		if (mask & bit) {
+@@ -755,6 +788,7 @@
+ 		}
+ 	}
+ 	dzt.active = mask;
++    return true;
+ }
+ 
+ static bool
+@@ -985,6 +1019,9 @@
+ 	/* Leave the event buffer page selected for firmware touch report reads. */
+ 	if (!dz_nvt_page(DIZI_NVT_EVENT)) goto out;
+ 	printf("DIZI TOUCH: verified firmware %#x, polling IRQ54\n", fwinfo[0]);
++    /* Neither opt-in nor HID registration can bypass this physical proof.
++     * The 0104 firmware plan does not upload or supply this runtime proof. */
++    dzt.hid_verified = true;
+ 	unsigned errors = 0;
+ 	for (;;) {
+ 		/* GPIO54 input is active-low; periodic sampling recovers missed edges. */
+@@ -993,7 +1030,12 @@
+ 			int x[DIZI_TOUCH_MAX] = {0}, y[DIZI_TOUCH_MAX] = {0};
+ 			uint32_t mask = 0;
+ 			if (dz_nvt_read(0, pkt, sizeof(pkt)) && dz_parse(pkt, x, y, &mask)) {
+-				dz_publish(mask, x, y);
++                if (!dz_publish(mask, x, y)) {
++                    /* Never fall back to old HID semantics if bridge fails. */
++                    printf("DIZI TOUCH: HID frame rejected; stopping bridge\n");
++                    dzt.dead = true;
++                    break;
++                }
+ 				errors = 0;
+ 			} else if (++errors >= 10) {
+ 				dz_release();
+@@ -1023,6 +1065,9 @@
+ 	/* Dizi must opt in explicitly; the legacy sweet default is retained. */
+ 	if (dizihw) enabled = 0;
+ 	(void)PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
++    int novatek_hid = 0;
++    (void)PE_parse_boot_argn("dizinovatekhid", &novatek_hid, sizeof(novatek_hid));
++    dzt.hid_bridge = dizihw == 1 && enabled == 1 && novatek_hid == 1;
+ 	(void)PE_parse_boot_argn("sweettouchirq", &st.irq_hint, sizeof(st.irq_hint));
+ 	if (!enabled) {
+ 		printf("SWEET TOUCH: disabled (sweettouch=0)\n");
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -27,6 +27,7 @@
+ #include "IOHIDEventService.h"
+ #include "IOHIDEventServiceUserClient.h"
+ #include "IOHIDEvent.h"
++#include "DiziNovatekHIDBridge0119.h"
+ #include "IOHIDKeys.h"
+ #include "IOHIDPrivateKeys.h"
+ #include "IOHIDUsageTables.h"
+@@ -364,6 +365,8 @@
+ public:
+ 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+ 	void touch(int finger, bool down, int x, int y);
++    bool novatekFrame(uint32_t mask, const int *x, const int *y,
++        uint64_t sequence, bool verified_spi_report, bool cancel);
+ protected:
+ 	virtual UInt32 getPrimaryUsagePage() APPLE_KEXT_OVERRIDE { return kHIDPage_Digitizer; }
+ 	virtual UInt32 getPrimaryUsage() APPLE_KEXT_OVERRIDE { return kHIDUsage_Dig_TouchScreen; }
+@@ -372,6 +375,8 @@
+ 	IOLock *fLock;
+ 	int fLogicalW, fLogicalH, fOffX, fOffY, fPanelW, fPanelH;
+ 	bool fDizi;
++    bool fNovatekBridge;
++    struct dizi_nvt_hid_state fNovatekState;
+ 	bool fDown[SWEET_TOUCH_FINGERS];
+ 	bool fEdge[SWEET_TOUCH_FINGERS];
+ 	IOFixed fX[SWEET_TOUCH_FINGERS];
+@@ -467,6 +472,12 @@
+ 		OSSafeReleaseNULL(fb);
+ 		OSSafeReleaseNULL(display);
+ 	}
++    int novatek_hid = 0;
++    (void)PE_parse_boot_argn("dizinovatekhid", &novatek_hid, sizeof(novatek_hid));
++    fNovatekBridge = fDizi && novatek_hid == 1 &&
++        fPanelW == DIZI_NVT_HID_PANEL_W &&
++        fPanelH == DIZI_NVT_HID_PANEL_H;
++    bzero(&fNovatekState, sizeof(fNovatekState));
+ 	fOffX = (fLogicalW - fPanelW) / 2;
+ 	fOffY = (fLogicalH - fPanelH) / 2;
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+@@ -487,7 +498,9 @@
+ 	IOHIDEvent *collection;
+ 	bool any = false;
+ 
+-	if (finger < 0 || finger >= SWEET_TOUCH_FINGERS) {
++	if (finger < 0 || finger >= SWEET_TOUCH_FINGERS || fNovatekBridge) {
++        /* Native Novatek frame mode must not mix with legacy per-finger HID
++         * state (nor be fed by a software-generated contact). */
+ 		return;
+ 	}
+ 	x = x < 0 ? 0 : (x >= fPanelW ? fPanelW - 1 : x);
+@@ -575,6 +588,109 @@
+ 	collection->release();
+ }
+ 
++/* A single Novatek report -> ONE coherent digitizer collection.
++ * Invoked only by BSD's 0100 post-handshake/read/checksum path. The existing
++ * IOHIDEventService and user-client queue are the sole event owner; no second
++ * IOService or synthetic touch generator is registered.
++ */
++bool
++SweetHIDTouch::novatekFrame(uint32_t mask, const int *x, const int *y,
++    uint64_t sequence, bool verified_spi_report, bool cancel)
++{
++    if (!fNovatekBridge || !fLock || !x || !y)
++        return false;
++    struct dizi_nvt_hid_frame frame = {};
++    frame.active = mask;
++    frame.sequence = sequence;
++    frame.verified_spi_report = verified_spi_report;
++    frame.cancel = cancel;
++    for (unsigned i = 0; i < DIZI_NVT_HID_CONTACTS; ++i) {
++        frame.x[i] = x[i];
++        frame.y[i] = y[i];
++    }
++
++    IOLockLock(fLock);
++    struct dizi_nvt_hid_state next = {};
++    struct dizi_nvt_hid_plan plan = {};
++    if (!dizi_nvt_hid_plan(&fNovatekState, &frame, fLogicalW, fLogicalH,
++        &next, &plan)) {
++        IOLockUnlock(fLock);
++        return false;
++    }
++    if (!plan.changed) {
++        /* A successfully observed, unmodified frame advances the local
++         * sequence but creates no spurious HID movement. */
++        fNovatekState = next;
++        IOLockUnlock(fLock);
++        return true;
++    }
++
++    uint64_t now = mach_absolute_time();
++    IOHIDEvent *collection = IOHIDEvent::digitizerEvent(now, 0,
++        kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
++    if (!collection) {
++        IOLockUnlock(fLock);
++        return false;
++    }
++    collection->setIntegerValue(kIOHIDEventFieldDigitizerCollection, TRUE);
++    UInt32 cmask = 0;
++    int first = -1;
++    /* Both surviving active fingers and newly-ended fingers are present in
++     * one frame; stable Novatek ID (1..10) maps to HID index (0..9). */
++    uint32_t included = plan.active | plan.ended;
++    for (unsigned i = 0; i < DIZI_NVT_HID_CONTACTS; ++i) {
++        UInt32 bit = 1u << i;
++        if (!(included & bit)) continue;
++        bool down = (plan.active & bit) != 0;
++        if (first < 0) first = (int)i;
++        IOHIDEvent *child = IOHIDEvent::digitizerEvent(now, i + 2,
++            kIOHIDDigitizerTransducerTypeFinger, down, down ? 1 : 0,
++            (IOFixed)plan.fx[i], (IOFixed)plan.fy[i]);
++        if (!child) {
++            collection->release();
++            IOLockUnlock(fLock);
++            return false;
++        }
++        UInt32 flags = (plan.edges & bit) ?
++            kIOHIDDigitizerEventFromEdgeTip : 0;
++        if ((plan.started | plan.ended) & bit)
++            flags |= kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange;
++        if ((plan.started | plan.moved) & bit)
++            flags |= kIOHIDDigitizerEventPosition;
++        if (plan.started & bit)
++            flags |= kIOHIDDigitizerEventIdentity;
++        child->setIntegerValue(kIOHIDEventFieldDigitizerIndex, i);
++        child->setIntegerValue(kIOHIDEventFieldDigitizerIdentity, i + 2);
++        child->setIntegerValue(kIOHIDEventFieldDigitizerTouch, down);
++        child->setIntegerValue(kIOHIDEventFieldDigitizerEventMask, flags);
++        collection->appendChild(child);
++        child->release();
++        cmask |= flags;
++    }
++    IOFixed cx = first < 0 ? 0 : (IOFixed)plan.fx[first];
++    IOFixed cy = first < 0 ? 0 : (IOFixed)plan.fy[first];
++    bool any = plan.active != 0;
++    collection->setFixedValue(kIOHIDEventFieldDigitizerX, cx);
++    collection->setFixedValue(kIOHIDEventFieldDigitizerY, cy);
++    collection->setIntegerValue(kIOHIDEventFieldDigitizerRange, any);
++    collection->setIntegerValue(kIOHIDEventFieldDigitizerTouch, any);
++    collection->setIntegerValue(kIOHIDEventFieldDigitizerEventMask, cmask);
++    collection->setIntegerValue(kIOHIDEventFieldDigitizerButtonMask, any ? 1 : 0);
++    fNovatekState = next;
++    IOLockUnlock(fLock);
++    dispatchEvent(collection);
++    collection->release();
++    return true;
++}
++
++extern "C" bool
++dizi_nvt_hid_frame(uint32_t mask, const int *x, const int *y,
++    uint64_t sequence, bool verified_spi_report, bool cancel)
++{
++    return gSweetTouch && gSweetTouch->novatekFrame(mask, x, y,
++        sequence, verified_spi_report, cancel);
++}
++
+ /* key: 0 power (side button), 1 volume up, 2 volume down, 3 home */
+ extern "C" void
+ sweet_hid_key(int key, int down)
+diff --git a/iokit/Kernel/arm/hid/DiziNovatekHIDBridge0119.h b/iokit/Kernel/arm/hid/DiziNovatekHIDBridge0119.h
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/hid/DiziNovatekHIDBridge0119.h
+@@ -0,0 +1,120 @@
++/* Source-only, no-MMIO NT36532 -> IOHIDEvent frame planner (2026).
++ * 0100 dz_parse validates the chip's report checksum, firmware WDT/ESD,
++ * contact IDs and 16000x25600 super-resolution ranges; its coordinates are
++ * divided by 10 before passing here. This planner is an additional barrier.
++ * A frame with a physical contact MUST have passed the 0100 post-start
++ * trim/cascade/firmware handshake and a fresh successful SPI read.
++ * No synthetic down is possible on a transport error. An explicit cancel
++ * releases only contacts previously accepted from a real report.
++ */
++#ifndef DIZI_NOVATEK_HID_BRIDGE_0119_H
++#define DIZI_NOVATEK_HID_BRIDGE_0119_H
++#include <stdint.h>
++#include <stdbool.h>
++
++#define DIZI_NVT_HID_CONTACTS 10u
++#define DIZI_NVT_HID_MASK ((1u << DIZI_NVT_HID_CONTACTS) - 1u)
++#define DIZI_NVT_HID_PANEL_W 1600
++#define DIZI_NVT_HID_PANEL_H 2560
++#define DIZI_NVT_HID_EDGE_PX 48
++
++struct dizi_nvt_hid_frame {
++    uint32_t active;
++    int32_t x[DIZI_NVT_HID_CONTACTS];
++    int32_t y[DIZI_NVT_HID_CONTACTS];
++    uint64_t sequence;  /* locally monotonically increasing per report */
++    bool verified_spi_report; /* not an invented readiness bit */
++    bool cancel; /* allowed ONLY to release previously confirmed contacts */
++};
++
++struct dizi_nvt_hid_state {
++    uint64_t sequence;
++    uint32_t active;
++    uint32_t edges;
++    int32_t fx[DIZI_NVT_HID_CONTACTS]; /* 16.16 normalized to canvas */
++    int32_t fy[DIZI_NVT_HID_CONTACTS];
++};
++
++struct dizi_nvt_hid_plan {
++    uint32_t active, changed, started, ended, moved, edges;
++    int32_t fx[DIZI_NVT_HID_CONTACTS];
++    int32_t fy[DIZI_NVT_HID_CONTACTS];
++};
++
++static inline bool
++dizi_nvt_hid_plan(const struct dizi_nvt_hid_state *old,
++    const struct dizi_nvt_hid_frame *frame, int logical_w, int logical_h,
++    struct dizi_nvt_hid_state *next, struct dizi_nvt_hid_plan *out)
++{
++    if (!old || !frame || !next || !out || next == old ||
++        frame->sequence == 0 || frame->sequence <= old->sequence ||
++        logical_w <= 0 || logical_h <= 0 || logical_w > 16384 ||
++        logical_h > 16384 || (frame->active & ~DIZI_NVT_HID_MASK))
++        return false;
++    if (frame->cancel) {
++        /* SPI failure may only end physical touches observed previously. */
++        if (frame->verified_spi_report || frame->active != 0 || !old->active)
++            return false;
++    } else if (!frame->verified_spi_report) {
++        return false;
++    }
++
++    struct dizi_nvt_hid_state ns = *old;
++    struct dizi_nvt_hid_plan plan = {0};
++    uint32_t mask = frame->cancel ? 0 : frame->active;
++    plan.active = mask;
++    plan.started = mask & ~old->active;
++    plan.ended = old->active & ~mask;
++    int off_x = (logical_w - DIZI_NVT_HID_PANEL_W) / 2;
++    int off_y = (logical_h - DIZI_NVT_HID_PANEL_H) / 2;
++
++    for (unsigned i = 0; i < DIZI_NVT_HID_CONTACTS; ++i) {
++        uint32_t bit = 1u << i;
++        if (mask & bit) {
++            int x = frame->x[i], y = frame->y[i];
++            if (x < 0 || x >= DIZI_NVT_HID_PANEL_W ||
++                y < 0 || y >= DIZI_NVT_HID_PANEL_H)
++                return false; /* do not clip physically impossible raw data */
++            int cx = x + off_x, cy = y + off_y;
++            if (cx < 0) cx = 0;
++            if (cy < 0) cy = 0;
++            if (cx >= logical_w) cx = logical_w - 1;
++            if (cy >= logical_h) cy = logical_h - 1;
++            /* This is the precise 16.16 mapping in 0099 SweetHIDTouch. */
++            int32_t fx = (int32_t)(((int64_t)cx << 16) / logical_w);
++            int32_t fy = (int32_t)(((int64_t)cy << 16) / logical_h);
++            if (plan.started & bit) {
++                if (cx < DIZI_NVT_HID_EDGE_PX ||
++                    cx > logical_w - 1 - DIZI_NVT_HID_EDGE_PX ||
++                    cy < DIZI_NVT_HID_EDGE_PX ||
++                    cy > logical_h - 1 - DIZI_NVT_HID_EDGE_PX)
++                    ns.edges |= bit;
++                else
++                    ns.edges &= ~bit;
++            } else if (old->fx[i] != fx || old->fy[i] != fy) {
++                plan.moved |= bit;
++            }
++            ns.fx[i] = fx;
++            ns.fy[i] = fy;
++        } else if (plan.ended & bit) {
++            /* Keep last real coordinate for touch-up; don't invent a point. */
++        } else {
++            ns.edges &= ~bit;
++        }
++    }
++    plan.changed = plan.started | plan.ended | plan.moved;
++    plan.edges = ns.edges;
++    for (unsigned i = 0; i < DIZI_NVT_HID_CONTACTS; ++i) {
++        plan.fx[i] = ns.fx[i];
++        plan.fy[i] = ns.fy[i];
++    }
++    ns.active = mask;
++    ns.sequence = frame->sequence;
++    /* Caller commits after IOHIDEvent allocations succeed. No side effects
++     * or partially visible touches in the rejection path. */
++    *next = ns;
++    *out = plan;
++    return true;
++}
++
++#endif /* DIZI_NOVATEK_HID_BRIDGE_0119_H */

@@ -1,0 +1,314 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -117,6 +117,8 @@
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+ bsd/dev/dizi_nt36532_fw.c		standard
++bsd/dev/nvt_session_0120.c		standard
++bsd/dev/nvt_session_xnu_0120.c	standard
+ 
+ bsd/dev/monotonic.c optional monotonic
+ bsd/dev/se9_clock.c		standard
+diff --git a/bsd/dev/nvt_session_0120.h b/bsd/dev/nvt_session_0120.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/nvt_session_0120.h
+@@ -0,0 +1,69 @@
++/* SPDX-License-Identifier: MIT
++ * POCO Pad Novatek SRAM load -> identity/boot handshake -> IRQ frame state.
++ * Synchronous transaction coordinator. No MMIO, DMA or fake ownership.
++ */
++#ifndef DIZI_NVT_SESSION_0120_H
++#define DIZI_NVT_SESSION_0120_H
++#include <stdint.h>
++#include <stddef.h>
++#include <stdbool.h>
++#include "nt36532_fw.h"
++
++#define DIZI_NVT0120_CONTACTS 10u
++#define DIZI_NVT0120_REPORT 108u
++
++enum dizi_nvt0120_state {
++    DIZI_NVT0120_STOPPED = 0, DIZI_NVT0120_LOADING,
++    DIZI_NVT0120_AWAIT_BOOT, DIZI_NVT0120_ACTIVE,
++    DIZI_NVT0120_FAILED
++};
++
++/* All proofs must come from independently authenticated kernel owners.
++ * Boot arguments, FDT declarations, fake tests, or register snapshots do
++ * NOT create authorization or an IOVA mapping. */
++struct dizi_nvt0120_lease {
++    bool smmu_gpi_sid416_owned;
++    bool smmu_qup_sid403_owned;
++    bool gpi_event_ring_owned;
++    bool qup_data_iova_mapped;
++    bool se9_gcc_tlmm_owned;
++    bool irq54_owned;
++    bool spi_chip_identity_read;
++    bool no_other_touch_reader;
++};
++
++struct dizi_nvt0120_ops {
++    void *context;
++    int (*select_page)(void *, uint32_t);
++    int (*write_sram)(void *, uint8_t, const uint8_t *, size_t);
++    /* Must verify all hardware firmware CRCs and complete Novatek boot.
++     * Sender cannot infer readiness merely from last successful SPI write. */
++    int (*verify_boot)(void *, uint8_t fw_version);
++    /* Delivers hardware-verified finger updates into Apple's HID path. */
++    void (*contact)(void *, unsigned id, bool down, unsigned x, unsigned y);
++};
++
++struct dizi_nvt0120_session {
++    enum dizi_nvt0120_state state;
++    struct dizi_nvt0120_ops ops;
++    uint32_t active_mask;
++    uint16_t x[DIZI_NVT0120_CONTACTS], y[DIZI_NVT0120_CONTACTS];
++    unsigned consecutive_bad_frames;
++};
++
++/* Begin only on an authorized, exclusively leased DMA/GENI transport.
++ * Binary blob is user-provided, never embedded or trusted by file name.
++ * A failed or ambiguous boot poisons this session until reset. */
++int dizi_nvt0120_start(struct dizi_nvt0120_session *s,
++    const struct dizi_nvt0120_lease *lease,
++    const struct dizi_nvt0120_ops *ops, const uint8_t *firmware,
++    size_t firmware_size);
++
++/* Existing Novatek super-resolution 108-byte report, not the SPI dummy
++ * bytes. Atomic parse-before-publish, no events on malformed frames.
++ * Repeat failures release contacts to avoid stuck touches. */
++int dizi_nvt0120_frame(struct dizi_nvt0120_session *s,
++    const uint8_t *packet, size_t size);
++void dizi_nvt0120_stop(struct dizi_nvt0120_session *s);
++
++#endif
+diff --git a/bsd/dev/nvt_session_0120.c b/bsd/dev/nvt_session_0120.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/nvt_session_0120.c
+@@ -0,0 +1,112 @@
++#include "nvt_session_0120.h"
++#include <string.h>
++
++static bool authorized(const struct dizi_nvt0120_lease *p)
++{
++    return p && p->smmu_gpi_sid416_owned && p->smmu_qup_sid403_owned &&
++        p->gpi_event_ring_owned && p->qup_data_iova_mapped &&
++        p->se9_gcc_tlmm_owned && p->irq54_owned &&
++        p->spi_chip_identity_read && p->no_other_touch_reader;
++}
++
++static void release_all(struct dizi_nvt0120_session *s)
++{
++    if (!s) return;
++    if (s->ops.contact)
++        for (unsigned i = 0; i < DIZI_NVT0120_CONTACTS; ++i)
++            if (s->active_mask & (1u << i))
++                s->ops.contact(s->ops.context, i, false, s->x[i], s->y[i]);
++    s->active_mask = 0;
++}
++
++int dizi_nvt0120_start(struct dizi_nvt0120_session *s,
++    const struct dizi_nvt0120_lease *lease,
++    const struct dizi_nvt0120_ops *ops, const uint8_t *firmware,
++    size_t firmware_size)
++{
++    if (!s || s->state != DIZI_NVT0120_STOPPED || !authorized(lease) ||
++        !ops || !ops->contact || !ops->select_page || !ops->write_sram ||
++        !ops->verify_boot || !firmware)
++        return -1;
++    struct dizi_nvt_fw fw;
++    if (dizi_nvt_fw_parse(firmware, firmware_size, &fw)) return -1;
++    s->state = DIZI_NVT0120_LOADING;
++    s->ops = *ops;
++    s->active_mask = 0;
++    s->consecutive_bad_frames = 0;
++    const struct dizi_nvt_fw_transport transport = {
++        .context = ops->context, .select_page = ops->select_page,
++        .write_sram = ops->write_sram
++    };
++    if (dizi_nvt_fw_upload(&fw, &transport)) goto fail;
++    s->state = DIZI_NVT0120_AWAIT_BOOT;
++    if (ops->verify_boot(ops->context, fw.version)) goto fail;
++    s->state = DIZI_NVT0120_ACTIVE;
++    return 0;
++fail:
++    release_all(s);
++    s->state = DIZI_NVT0120_FAILED;
++    return -1;
++}
++
++int dizi_nvt0120_frame(struct dizi_nvt0120_session *s,
++    const uint8_t *data, size_t size)
++{
++    if (!s || s->state != DIZI_NVT0120_ACTIVE || !s->ops.contact)
++        return -1;
++    if (!data || size != DIZI_NVT0120_REPORT) goto malformed;
++    unsigned checksum = 0;
++    for (unsigned i = 1; i <= 65; ++i) checksum += data[i];
++    if (checksum & 255u) goto malformed;
++    bool esd = true, wdt = true;
++    for (unsigned i = 1; i <= 6; ++i) {
++        esd &= data[i] == 0x77u;
++        wdt &= data[i] == 0xfdu || data[i] == 0xfeu;
++    }
++    if (esd || wdt) goto malformed;
++    uint32_t next = 0;
++    uint16_t nx[DIZI_NVT0120_CONTACTS] = {0};
++    uint16_t ny[DIZI_NVT0120_CONTACTS] = {0};
++    for (unsigned i = 0; i < DIZI_NVT0120_CONTACTS; ++i) {
++        const uint8_t *p = data + 1u + i * 6u;
++        unsigned id = p[0] >> 3, state = p[0] & 7u;
++        if (!id || id > DIZI_NVT0120_CONTACTS || (state != 1u && state != 2u))
++            continue;
++        unsigned x = ((unsigned)p[1] << 8) | p[2];
++        unsigned y = ((unsigned)p[3] << 8) | p[4];
++        if (x >= 16000u || y >= 25600u || (next & (1u << (id - 1u))))
++            goto malformed;
++        next |= 1u << (id - 1u);
++        nx[id - 1u] = (uint16_t)(x / 10u);
++        ny[id - 1u] = (uint16_t)(y / 10u);
++    }
++    /* Atomic malformed rejection: publish AFTER the whole frame validates. */
++    for (unsigned id = 0; id < DIZI_NVT0120_CONTACTS; ++id) {
++        uint32_t bit = 1u << id;
++        if (next & bit) {
++            if (!(s->active_mask & bit) || nx[id] != s->x[id] || ny[id] != s->y[id])
++                s->ops.contact(s->ops.context, id, true, nx[id], ny[id]);
++            s->x[id] = nx[id]; s->y[id] = ny[id];
++        } else if (s->active_mask & bit) {
++            s->ops.contact(s->ops.context, id, false, s->x[id], s->y[id]);
++        }
++    }
++    s->active_mask = next;
++    s->consecutive_bad_frames = 0;
++    return 0;
++malformed:
++    if (++s->consecutive_bad_frames >= 10u) {
++        release_all(s);
++        s->consecutive_bad_frames = 0;
++    }
++    return -1;
++}
++
++void dizi_nvt0120_stop(struct dizi_nvt0120_session *s)
++{
++    if (!s) return;
++    release_all(s);
++    s->state = DIZI_NVT0120_STOPPED;
++    memset(&s->ops, 0, sizeof(s->ops));
++    s->consecutive_bad_frames = 0;
++}
+diff --git a/bsd/dev/nvt_session_xnu_0120.h b/bsd/dev/nvt_session_xnu_0120.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/nvt_session_xnu_0120.h
+@@ -0,0 +1,19 @@
++/* BSD/XNU adapter for native Novatek firmware, reports and IOHID contacts.
++ * This is an in-kernel API for a future VERIFIED DMA/SE9 backend only.
++ * It is never callable from a boot argument/sysctl or userspace.
++ */
++#ifndef DIZI_NVT_SESSION_XNU_0120_H
++#define DIZI_NVT_SESSION_XNU_0120_H
++#include "nvt_session_0120.h"
++
++/* No XNU backend has verified ownership and mapped both SIDs yet.
++ * In particular, SID0x416 + SID0x403 may NOT use naked CPU physical PAs. */
++#define DIZI_NVT0120_NATIVE_TRANSPORT_READY 0
++
++int dizi_nvt0120_kernel_start(const struct dizi_nvt0120_lease *lease,
++    const struct dizi_nvt0120_ops *bus,
++    const uint8_t *firmware, size_t firmware_size);
++int dizi_nvt0120_kernel_frame(const uint8_t *packet, size_t size);
++void dizi_nvt0120_kernel_stop(void);
++enum dizi_nvt0120_state dizi_nvt0120_kernel_state(void);
++#endif
+diff --git a/bsd/dev/nvt_session_xnu_0120.c b/bsd/dev/nvt_session_xnu_0120.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/nvt_session_xnu_0120.c
+@@ -0,0 +1,82 @@
++/* SPDX-License-Identifier: MIT
++ * Real XNU binding of the 0120 chip-SRAM packet protocol to native HID.
++ * This requires a separate trusted GPI/QUP owner before any hardware IO;
++ * no such attestation producer exists. Keep default implementation inert.
++ */
++#include "nvt_session_xnu_0120.h"
++
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++
++static struct dizi_nvt0120_session dizi_nvt_session;
++#if DIZI_NVT0120_NATIVE_TRANSPORT_READY
++static struct dizi_nvt0120_ops dizi_nvt_bus;
++
++static int
++nvt_xnu_page(void *unused, uint32_t page)
++{
++    (void)unused;
++    return dizi_nvt_bus.select_page ?
++        dizi_nvt_bus.select_page(dizi_nvt_bus.context, page) : -1;
++}
++
++static int
++nvt_xnu_sram(void *unused, uint8_t offset, const uint8_t *bytes, size_t length)
++{
++    (void)unused;
++    return dizi_nvt_bus.write_sram ?
++        dizi_nvt_bus.write_sram(dizi_nvt_bus.context, offset, bytes, length) : -1;
++}
++
++static int
++nvt_xnu_boot(void *unused, uint8_t version)
++{
++    (void)unused;
++    return dizi_nvt_bus.verify_boot ?
++        dizi_nvt_bus.verify_boot(dizi_nvt_bus.context, version) : -1;
++}
++
++static void
++nvt_xnu_hid(void *unused, unsigned finger, bool down, unsigned x, unsigned y)
++{
++    (void)unused;
++    if (finger < DIZI_NVT0120_CONTACTS && x < 1600u && y < 2560u)
++        sweet_hid_touch((int)finger, down ? 1 : 0, (int)x, (int)y);
++}
++#endif
++
++int
++dizi_nvt0120_kernel_start(const struct dizi_nvt0120_lease *lease,
++    const struct dizi_nvt0120_ops *bus,
++    const uint8_t *firmware, size_t firmware_size)
++{
++#if DIZI_NVT0120_NATIVE_TRANSPORT_READY
++    if (!bus || !lease || dizi_nvt_session.state != DIZI_NVT0120_STOPPED)
++        return -1;
++    dizi_nvt_bus = *bus;
++    const struct dizi_nvt0120_ops adapter = {
++        .context = 0, .select_page = nvt_xnu_page,
++        .write_sram = nvt_xnu_sram, .verify_boot = nvt_xnu_boot,
++        .contact = nvt_xnu_hid
++    };
++    return dizi_nvt0120_start(&dizi_nvt_session, lease, &adapter,
++        firmware, firmware_size);
++#else
++    (void)lease; (void)bus; (void)firmware; (void)firmware_size;
++    return -1; /* no producer has proved both SID maps, SMMU/SE9/IRQ */
++#endif
++}
++
++int dizi_nvt0120_kernel_frame(const uint8_t *packet, size_t size)
++{
++    return dizi_nvt0120_frame(&dizi_nvt_session, packet, size);
++}
++
++void dizi_nvt0120_kernel_stop(void)
++{
++    dizi_nvt0120_stop(&dizi_nvt_session);
++}
++
++enum dizi_nvt0120_state dizi_nvt0120_kernel_state(void)
++{
++    return dizi_nvt_session.state;
++}
