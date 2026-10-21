@@ -2,6 +2,8 @@
 
 ## 2026-10-21 touch transport integration (0117–0120)
 
+**Full kernel compilation and link:** macOS GitHub Actions `39539461453` success at SHA `70f9ba9`; 17,268,768-byte ARM64 Mach-O verified SHA-256 `d8e5445e0683ef93227ac6851071ffee81b6903c47acd36005bb7fdd7dff0746`. **Not a live touchscreen/firmware/DMA success**. The running POCO Pad remains the known-good 0116 GUI configuration; no new boot was performed.
+
 * **XNU source connected, not device-verified:** 0117 implements source-based GPII0 TX/RX/event ring and completion mechanics; 0118 implements GENI SE9 SPI request/completion/timeout control; 0119 connects validated Novatek contacts to native coherent IOHIDEvent digitizer reports; 0120 connects firmware SRAM upload and verified post-upload boot to a native per-finger HID session. Host boundary tests and ARM64 object compilation cover these modules.
 * **No physical touch enabled:** actual XNU ownership/doorbell/GPI IRQ/SMMU write backend remains absent. 0118 native backend is off and 0120's native transport gate is explicitly `0`. Existing board bootargs use `sweettouch=0` to protect known-good GUI.
 * **Must be resolved before real touch:** independent hypervisor authority for both SIDs `0x403` (QUP SPI payloads) and `0x416` (GPI rings); actual ID2/SMR/S2CR/CB evidence and non-overlapping S1 page-table activation; separate coherent IOVA pages/pinning, physical ring and event completion handling, SE9 root clock and GPIO10–13 exclusive mux, GPIO54 routed IRQ, and actual NT36532 firmware transfer/readback/boot handshake. Static FDT entries and successful synthetic rings never imply hardware authority.
