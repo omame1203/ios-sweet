@@ -1,5 +1,24 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: Renegade Project EDK2 porting guide assessed for dizi
+
+- User linked `https://renegade-project.tech/en/porting` and requested reuse
+  of existing dizi migration evidence. This concerns Qualcomm EDK2/UEFI,
+  **not** a direct solution to macOS27 XNU PAC/VMAPPLE HVC incompatibility.
+- Read the original SDM845 Renegade guide and audited upstream modern
+  `edk2-porting/edk2-msm` at `e1952621f419f8db60ed28271264e1b5184c571d`
+  in a separate `/tmp` sparse checkout; **no SM7435 Silicon or dizi DSC/FDF
+  platform is present**. Existing Renegade Issue #418 is only a support request.
+- Added independent source-only candidate `ports/renegade/dizi.conf`,
+  `tools/dizi-renegade-preflight.py` and hostile FDT regression tests, plus
+  `docs/DIZI_RENEGADE_EDK2_PORT.md`. Original board.json and saved FDT confirm
+  7 DDR banks, 35 fixed and 10 dynamic reservations, 1600x2560 framebuffer
+  and previous GKI-v4 boot transport. This is an **offline audit**, NOT a
+  working EDK2 UEFI build, flash, device boot, nor progress on native XNU27.
+- All pre-existing unrelated uncommitted shim/PAC/TCG/CI work and Apple
+  research assets remain untouched. Do not source random donor DXE, ACPI or
+  memory maps from incompatible SDM845/SM7325 machines.
+
 ## 2026-10-21: NEW immediate debug boot and user-confirmed CPU register sampling
 
 - User explicitly authorized an immediate incomplete experimental boot for
