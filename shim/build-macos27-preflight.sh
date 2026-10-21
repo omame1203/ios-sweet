@@ -16,6 +16,15 @@ done
 CFLAGS=(-std=c11 -O2 -ffreestanding -nostdlib -fno-pic -fno-builtin
         -mgeneral-regs-only -mstrict-align -fno-stack-protector
         -Wall -Wextra -Werror -DBOARD_DIZI -DDIZI_MACOS27_PREFLIGHT)
+case "${1:-}" in
+    "") ;;
+    --pac-register-diagnostic)
+        CFLAGS+=(-DDIZI_MACOS27_PAC_TRAP_DIAGNOSTIC=1
+                 -DMAC27_PAC_RECOVERY_ENABLE=1
+                 -DMAC27_PAC_RECOVERY_HANDLER_WIRED=1)
+        ;;
+    *) echo "Usage: $0 [--pac-register-diagnostic]" >&2; exit 2 ;;
+esac
 # Never overwrite existing/working iPadOS diagnostic artifacts or saved images.
 mkdir -p out
 OUT=$(mktemp -d out/mac27-readonly-preflight-XXXXXXXX)

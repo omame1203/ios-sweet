@@ -132,11 +132,20 @@ def elf_symbol_table(elf: Path) -> dict[str, int]:
     return symbols
 
 
-def check_no_jump(elf: Path, symbols: dict[str, int]) -> None:
+def check_no_jump(elf: Path, symbols: dict[str, int], *, pac_register_diagnostic: bool = False) -> None:
     assembly = command("aarch64-linux-gnu-objdump", "-d", "--disassemble=shim_main", str(elf))
     start = command("aarch64-linux-gnu-objdump", "-d", "--disassemble=_start", str(elf))
     required = {"bootlog_init", "bootlog_puts", "con_clear", "con_hex", "con_hex2",
                 "con_str", "mac27_dizi_probe_dtb", "bootlog_sync"}
+    if pac_register_diagnostic:
+        require(all(name in symbols for name in (
+            "mac27_pac_recovery_sample", "mac27_pac_recovery_exc_handler",
+            "mac27_pac_recovery_read_isar1", "mac27_pac_recovery_read_isar2")),
+            "PAC register diagnostic requires enabled reader and exception handler")
+        required.add("mac27_pac_recovery_sample")
+        handler = command("aarch64-linux-gnu-objdump", "-d", "--disassemble=exc_handler", str(elf))
+        require(re.search(r"\bbl\s+[0-9a-f]+\s+<mac27_pac_recovery_exc_handler>", handler) is not None,
+                "PAC reader exception hook is not wired")
     external_branches = []
     for line in assembly.splitlines():
         match = re.search(r"^\s*[0-9a-f]+:\s+[0-9a-f]+\s+(bl|b)\s+([0-9a-f]+)\s+<([^>]+)>", line)
@@ -156,7 +165,7 @@ def check_no_jump(elf: Path, symbols: dict[str, int]) -> None:
             "_start is not the expected shim_main then WFE parking loop")
 
 
-def verify_elf(elf: Path, target_image: Path) -> dict:
+def verify_elf(elf: Path, target_image: Path, *, pac_register_diagnostic: bool = False) -> dict:
     raw = read_small(elf, MAX_ELF_BYTES, "preflight-only ELF")
     require(raw[:5] == ELF_MAGIC + b"\x02" and raw[5] == 1,
             "preflight ELF must be ELF64 little endian")
@@ -171,7 +180,7 @@ def verify_elf(elf: Path, target_image: Path) -> dict:
     end = symbols.get("_end", 0)
     require(0 < end <= MAX_ELF_BYTES and end % BOOT_PAGE == 0,
             "_end missing, misaligned or exceeds shim size budget")
-    check_no_jump(elf, symbols)
+    check_no_jump(elf, symbols, pac_register_diagnostic=pac_register_diagnostic)
     command("aarch64-linux-gnu-objcopy", "-O", "binary", str(elf), str(target_image))
     with target_image.open("r+b") as stream:
         header = stream.read(64)
@@ -193,7 +202,8 @@ def verify_elf(elf: Path, target_image: Path) -> dict:
             "image_size": end, "entry_offset": symbols["_start"],
             "linux_image_flags": "0x000000000000000a",
             "header_verified": True, "no_xnu_jump_verified_static_disassembly": True,
-            "el1_diagnostics_may_access_hardware": True}
+            "el1_diagnostics_may_access_hardware": True,
+            "pac_register_diagnostic": pac_register_diagnostic}
 
 
 def align(value: int, page: int = BOOT_PAGE) -> int:
@@ -242,7 +252,7 @@ def verify_v4(image: Path, image_bytes: int, image_sha: str,
 
 
 def package(elf: Path, kc: Path, manifest: Path, output: Path,
-            *, enabled: bool) -> dict:
+            *, enabled: bool, pac_register_diagnostic: bool = False) -> dict:
     require(enabled, "refusing to build: supply --no-execute-review-gate explicitly")
     require(not output.is_symlink() and not output.exists(),
             "output already exists; no overwrites allowed")
@@ -264,7 +274,7 @@ def package(elf: Path, kc: Path, manifest: Path, output: Path,
     with tempfile.TemporaryDirectory(prefix="mac27-nojump-", dir=output.parent) as tmp:
         work = Path(tmp)
         shim_image = work / "Linux-Image"
-        shim_meta = verify_elf(elf, shim_image)
+        shim_meta = verify_elf(elf, shim_image, pac_register_diagnostic=pac_register_diagnostic)
         staged = work / "boot.img"
         command("mkbootimg", "--header_version", "4", "--kernel", str(shim_image),
                 "--ramdisk", str(kc), "--os_version", "12.0.0",
@@ -321,10 +331,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--no-execute-review-gate", action="store_true",
                         help="acknowledge the output is inert, not a native macOS boot image")
+    parser.add_argument("--pac-register-diagnostic", action="store_true",
+                        help="allow the separately enabled EL1 CPU ID reader; XNU entry stays disabled")
     args = parser.parse_args(argv)
     try:
         result = package(args.preflight_elf, args.kc, args.build_manifest,
-                         args.output, enabled=args.no_execute_review_gate)
+                         args.output, enabled=args.no_execute_review_gate,
+                         pac_register_diagnostic=args.pac_register_diagnostic)
     except (Rejected, OSError) as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 2

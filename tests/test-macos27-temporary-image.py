@@ -157,6 +157,28 @@ class ImageTests(unittest.TestCase):
         with self.assertRaisesRegex(m27.Rejected, "AArch64"):
             m27.verify_elf(badelf, self.root / "outImage")
 
+    def test_pac_reader_requires_opt_in_and_exception_hook(self):
+        code = ("0 <shim_main>:\n"
+                " 0: 94000010 bl 40 <mac27_dizi_probe_dtb>\n"
+                " 4: 94000010 bl 50 <mac27_pac_recovery_sample>\n"
+                " 8: 94000010 bl 60 <bootlog_sync>\n")
+        start = "0 <_start>:\n 0: 94000010 bl 40 <shim_main>\n 4: d503207f wfe\n"
+        symbols = {name: i + 1 for i, name in enumerate((
+            "mac27_pac_recovery_sample", "mac27_pac_recovery_exc_handler",
+            "mac27_pac_recovery_read_isar1", "mac27_pac_recovery_read_isar2"))}
+        with mock.patch.object(m27, "command", side_effect=[code, start]):
+            with self.assertRaisesRegex(m27.Rejected, "unknown branch"):
+                m27.check_no_jump(m27.DEFAULT_ELF, symbols)
+        with mock.patch.object(m27, "command", side_effect=[code, start]):
+            with self.assertRaisesRegex(m27.Rejected, "enabled reader"):
+                m27.check_no_jump(m27.DEFAULT_ELF, {}, pac_register_diagnostic=True)
+        with mock.patch.object(m27, "command", side_effect=[code, start, "0: ret"]):
+            with self.assertRaisesRegex(m27.Rejected, "not wired"):
+                m27.check_no_jump(m27.DEFAULT_ELF, symbols, pac_register_diagnostic=True)
+        handler = "0: 94000010 bl 40 <mac27_pac_recovery_exc_handler>"
+        with mock.patch.object(m27, "command", side_effect=[code, start, handler]):
+            m27.check_no_jump(m27.DEFAULT_ELF, symbols, pac_register_diagnostic=True)
+
     def test_gki_v4_synthetic_roundtrip_validated_no_fastboot(self):
         if not m27.DEFAULT_ELF.is_file():
             self.skipTest("preflight ELF not present")

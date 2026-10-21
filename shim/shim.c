@@ -177,7 +177,7 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 {
 #if defined(DIZI_MACOS27_PREFLIGHT) && defined(DIZI_MACOS27_PAC_TRAP_DIAGNOSTIC)
 	/* Only exact private MRS fault sites can resume. Traps sent to EL2 are
-	 * NOT recoverable here; these flags must remain off on unverified dizi. */
+	 * NOT recoverable here. Opt-in diagnostic only; no XNU/PAC-key writes. */
 	if (mac27_pac_recovery_exc_handler(slot, regs))
 		return;
 #endif
@@ -493,14 +493,21 @@ void shim_main(uint64_t dtb)
 #endif
 	con_str("LOADER", dizi_why);
 #if defined(DIZI_MACOS27_PAC_TRAP_DIAGNOSTIC)
-	/* DISABLED in the existing review-only image, and never invoked in the
+	/* DISABLED in the original review-only image, and never invoked in the
 	 * legacy iPadOS path. A read ISAR alone cannot prove native PAC readiness. */
 	struct mac27_pac_recovery_state pac_observed;
+	stage = "macOS27 CPU ID register sample";
+	con_hex("MIDR", rsr("midr_el1"));
+	con_hex("SCTLR", rsr("sctlr_el1"));
+	con_hex("VBAR", rsr("vbar_el1"));
+	con_str("PAC", "reading CPU ID registers; no PAC key writes");
+	bootlog_sync();
 	int pac_status = mac27_pac_recovery_sample(&pac_observed, 1);
 	con_hex("PAC sample", pac_status);
 	con_hex("ISAR1", pac_observed.isar1);
 	con_hex("ISAR2", pac_observed.isar2);
 	con_hex("PAC trap", pac_observed.trap_mask);
+	con_hex("PAC read", pac_observed.observed_mask);
 #endif
 #ifdef DIZI_MACOS27_PREFLIGHT
 	/* 26A434 is not compatible with this Qualcomm boot environment yet.

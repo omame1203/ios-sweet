@@ -1,5 +1,12 @@
 # Working on ios-sweet
 
+- **Latest 2026-10-21 authorization:** the user explicitly requested an
+  immediate incomplete experimental temporary boot for debugging. A NEW
+  no-XNU-entry PAC-register diagnostic has now temporarily booted and its
+  screen was transcribed by the user. This supersedes the older source-only
+  restriction within this temporary/debug scope, not the no-flash rule.
+  The two CPU ID reads completed (observed_mask=3, trap_mask=0); this proves
+  neither PAC instruction support nor full XNU startup. See newest NOTES.
 - Read `NOTES.md` before starting; it contains the project goal, hardware facts,
   current blocker, local artifact locations and the next concrete action.
 - **Current POCO Pad target is genuine macOS 27 Golden Gate**, tracked in

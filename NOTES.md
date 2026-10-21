@@ -1,5 +1,41 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: NEW immediate debug boot and user-confirmed CPU register sampling
+
+- User explicitly authorized an immediate incomplete experimental boot for
+  debugging. Executed temporary `fastboot boot`, no flash/erase/partition
+  changes, against exactly one `product: dizi` target.
+- NEW image `shim/out/dizi/mac27-26A434-pac-register-debug-20261021.img`,
+  81,670,144 bytes, SHA256
+  `2cc1c8f5820bec05537f752ba54ee58eb9b83ba15c1c4bcea4e0f3ef441fef30`.
+  ELF `shim/out/mac27-readonly-preflight-rUhLYuie/mac27-preflight-only.elf`.
+  Original no-jump image, iPadOS images and Apple assets preserved.
+  Fastboot send OKAY 1.824s, boot OKAY 0.346s, total 2.220s; exact UTC and
+  host evidence in ignored `research/boot-mac27-pac-register-debug-20261021.json`.
+- User then transcribed the actual new screen: MIDR `412FD050`, SCTLR
+  `30D00800`, ISAR1 `000000001000001`, ISAR2 zero, PAC sample zero,
+  PAC trap zero, PAC read 3, ending `NO JUMP`. This **proves diagnostic
+  execution and two successful CPU ID reads** on the currently booting PE,
+  not Apple XNU execution or PAC initialization. No second reboot performed.
+- Literal reported ISAR1 0x1000001 decodes APA=0, API=0, GPA=1, GPI=0;
+  ISAR2 APA3=GPA3=0. Address authentication is not advertised by those
+  supplied values. Do NOT describe all PAC support as absent: GPA is 1 in
+  the transcription, and some other values (CurrentEL reserved bits,
+  CNTFRQ spelling) suggest transcription inaccuracies. Preserve original
+  report separately and verify from a photo/raw log before asserting exact
+  register values. MIDR part 0xd05 identifies Cortex-A55; not all eight PEs
+  have been sampled. Hypervisor masking/virtualization is not ruled out.
+- Added explicit `--pac-register-diagnostic` build/package opt-ins. Existing
+  exact-site EL1 exception hook is wired; only read-only ISAR sampling is
+  enabled, no PAC key writes, HVC, KC execution or UFS driver. Static package
+  checks still reject indirect/legacy XNU jumps and require the PAC handler
+  when enabled. Host sanitizer recovery checks and packager checks passed.
+- Current actual state is a parked native diagnostic shim, **NOT a native
+  macOS27 kernel boot**. Complete XNU boot remains unresolved. A PAC-free
+  kernel port or real compatible PAC execution backend plus Apple platform
+  adaptation is still required; bypassing a readiness flag will not provide
+  either. Earlier CURRENTLY SOURCE-ONLY section below is historical.
+
 ## 2026-10-21: genuine XNU27 instruction-execution request — CURRENTLY SOURCE-ONLY
 
 - The user explicitly requested attempting to execute genuine macOS27 XNU
