@@ -1,4 +1,36 @@
-# iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
+# POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
+
+## NEW target: genuine macOS 27 Golden Gate on dizi (2026-10-21)
+
+- **User explicitly changed the target OS** from the previously successful
+  iPadOS 16.7.16 GUI to **genuine macOS 27 Golden Gate** on Qualcomm POCO Pad
+  `dizi` SM7435. Do NOT relabel the old SpringBoard or XNU as macOS27.
+- macOS 27.0.1 (Apple build `26A434`) is publicly released, Apple Silicon
+  Mac only; Darwin 26 required. Verified old `xnu/out-0120/kernel.development.sweet`
+  binary contains `Darwin Kernel Version 22.6.0`, built against
+  `xnu-8796.141.3` (macOS 13.5 era), NOT macOS 27. All existing 0099/0116/0120
+  temporary boot images and iPadOS root remain untouched and useful as
+  hardware evidence; not a macOS27 boot claim.
+- Added separated fail-closed `boards/dizi-macos27.json`,
+  `tools/macos27-preflight.py`, native kernel-source audit,
+  APFS/graphics feasibility source modules, and
+  `docs/DIZI_MACOS27_MIGRATION.md`. Tests check wrong kernel/OS metadata,
+  source provenance and missing platform prerequisites. No Mac desktop
+  or macOS27 installer/SSV/KernelCollection was run or installed.
+- 2026-10-21 read-only Apple source probe: corresponding
+  `distribution-macOS/macos-270/release.json` URL returned HTTP 404;
+  `blacktop/darwin-xnu-build` build.sh currently lacks matching 27.0 case,
+  and no Xcode27 macOS27 SDK is available in this local Linux workspace.
+  Exact matching xnu/Darwin26 source tag and ABI therefore remain unproven.
+  Existing macOS13.5 GitHub workflow and 118 SWEET patches are NOT portable
+  to macOS27 by changing `MACOS_VERSION` alone. No new Mac kernel compile or
+  boot can truthfully be claimed.
+- **Do not touch/flash the current `userdata` HFS iPadOS root or firmware.**
+  macOS27 requires an APFS system/data volume group, authenticated Preboot,
+  SSV, correct userland/dyld code signatures, SEP/platform boot integration,
+  real desktop WindowServer/Adreno graphics and native input/IO. Work in a
+  separate branch and scratch paths; never use synthetic entitlement or
+  version spoofing as a substitute for functioning real macOS.
 
 ## POCO Pad port handoff (2026-10-20; applies to this worktree)
 

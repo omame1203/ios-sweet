@@ -1,0 +1,32 @@
+{
+  "target_name": "POCO Pad experimental macOS 27 port",
+  "board": "dizi",
+  "soc": "SM7435",
+  "target_os": "macOS",
+  "target_version_major": 27,
+  "expected_darwin_major": 26,
+  "build_train_prefix": "26",
+  "official_apple_device_supported": false,
+  "root_filesystem": "APFS",
+  "system_volume_signed": true,
+  "system_data_volume_group_required": true,
+  "existing_hardware_baseline": "XNU 22.6.0 on iPadOS 16 UFS HFS root, dizi-0120",
+  "hardware_source_profile": "boards/dizi.json",
+  "status": "not_bootable",
+  "reusable_components": [
+    "fastboot boot-v4 shim (not a native Apple iBoot)",
+    "16-KiB ARM64 translation support (must reassess ABI)",
+    "GICv3, timer and single CPU bring-up",
+    "UFS controller and framebuffer hardware inventory",
+    "read-only Qualcomm peripheral ownership evidence"
+  ],
+  "required_independent_work": [
+    "real matching macOS 27 kernel collection with independently verified provenance",
+    "macOS 27-compatible XNU and required closed-source kernel interfaces",
+    "APFS container, system/data volume group, sealed System and authenticated Preboot",
+    "macOS 27 userspace and matching dyld shared caches, code signing and launch services",
+    "Apple Silicon secure boot/SEP trust assumptions replaced without pretending to be an Apple product",
+    "functional graphics acceleration and WindowServer/CoreDisplay on SM7435",
+    "real SM7435 input, storage, power, USB and suspend hardware drivers"
+  ]
+}

@@ -1,4 +1,17 @@
-# POCO PadへのiPadOS移植（作業中）
+# POCO PadへのmacOS 27移植（新しい主目標）
+
+**2026-10-21：移植先をiPadOS 16からmacOS 27 Golden Gateへ変更しました。**
+現在のXNU 0120（Darwin 22.6.0）はiPadOS 16起動の既知動作基盤として
+**保存**します。これはmacOS 27のカーネルではなく、macOSのデスクトップを
+起動した実績もありません。
+
+新しいハードウェア移植計画、既存実装の再利用範囲、APFS/SSV・KernelCollection・
+WindowServerなどの障害は
+[`docs/DIZI_MACOS27_MIGRATION.md`](docs/DIZI_MACOS27_MIGRATION.md)を参照。
+新しいボード構成は`boards/dizi-macos27.json`、対応バージョンの読み取り専用
+事前検証は`tools/macos27-preflight.py`です。どちらもストレージを変更しません。
+
+## 過去のiPadOS 16実機移植記録（保存）
 
 対象はPOCO Pad 2405CPCFBG（`dizi`、SM7435）。
 参考実装のRedmi Note 10 Pro（`sweet`、SM7150）とは別の機種です。
