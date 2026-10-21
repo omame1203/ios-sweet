@@ -16,6 +16,13 @@
 #ifdef DIZI_MACOS27_PREFLIGHT
 #include "macos27_kc_probe.h"
 #endif
+#if defined(DIZI_MACOS27_PREFLIGHT) && defined(DIZI_MACOS27_PAC_TRAP_DIAGNOSTIC)
+#include "macos27_pac_recovery.h"
+#if !defined(MAC27_PAC_RECOVERY_ENABLE) || MAC27_PAC_RECOVERY_ENABLE != 1 || \
+    !defined(MAC27_PAC_RECOVERY_HANDLER_WIRED) || MAC27_PAC_RECOVERY_HANDLER_WIRED != 1
+#error "PAC MRS diagnostic requires explicit read and exception-recovery opt-ins"
+#endif
+#endif
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -168,6 +175,12 @@ static void irq_handler(void)
 
 void exc_handler(uint64_t slot, uint64_t *regs)
 {
+#if defined(DIZI_MACOS27_PREFLIGHT) && defined(DIZI_MACOS27_PAC_TRAP_DIAGNOSTIC)
+	/* Only exact private MRS fault sites can resume. Traps sent to EL2 are
+	 * NOT recoverable here; these flags must remain off on unverified dizi. */
+	if (mac27_pac_recovery_exc_handler(slot, regs))
+		return;
+#endif
 	if (slot == 5) {	/* IRQ from current EL, SPx */
 		irq_handler();
 		return;
@@ -479,6 +492,16 @@ void shim_main(uint64_t dtb)
 	    loader_boot(dtb) : "16K granule unsupported; payload skipped";
 #endif
 	con_str("LOADER", dizi_why);
+#if defined(DIZI_MACOS27_PAC_TRAP_DIAGNOSTIC)
+	/* DISABLED in the existing review-only image, and never invoked in the
+	 * legacy iPadOS path. A read ISAR alone cannot prove native PAC readiness. */
+	struct mac27_pac_recovery_state pac_observed;
+	int pac_status = mac27_pac_recovery_sample(&pac_observed, 1);
+	con_hex("PAC sample", pac_status);
+	con_hex("ISAR1", pac_observed.isar1);
+	con_hex("ISAR2", pac_observed.isar2);
+	con_hex("PAC trap", pac_observed.trap_mask);
+#endif
 #ifdef DIZI_MACOS27_PREFLIGHT
 	/* 26A434 is not compatible with this Qualcomm boot environment yet.
 	 * A probe result MUST NOT fall through to existing GIC/MMU/USB/UFS

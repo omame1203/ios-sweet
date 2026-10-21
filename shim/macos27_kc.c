@@ -158,3 +158,30 @@ int mac27_shim_stage(const void *kc, size_t kc_size,
     for (size_t i = 0; i < sizeof(encoded); ++i) dst[args_offset + i] = encoded[i];
     return MAC27_SHIM_OK;
 }
+
+int mac27_shim_stage_plain(const void *kc, size_t kc_size,
+                           const struct mac27_shim_request *req,
+                           const struct mac27_shim_layout *layout,
+                           const struct mac27_kc_plain_ownership *owner,
+                           void *window, size_t capacity,
+                           struct mac27_kc_plain_report *report)
+{
+    if (!owner || !report || !req || !layout || !window ||
+        !disjoint_pointers(window, capacity, owner, sizeof(*owner)) ||
+        !disjoint_pointers(window, capacity, report, sizeof(*report)) ||
+        owner->phys_base != req->phys_base ||
+        owner->memory_size != req->memory_size ||
+        owner->exclusive_writable_ram != 1 ||
+        owner->exclusive_start > req->phys_base ||
+        owner->exclusive_size < capacity ||
+        owner->exclusive_size > UINT64_MAX - owner->exclusive_start ||
+        req->phys_base - owner->exclusive_start >
+            owner->exclusive_size - capacity)
+        return MAC27_SHIM_ARGUMENT;
+    int err = mac27_shim_stage(kc, kc_size, req, layout, window, capacity);
+    if (err) return err;
+    /* The real 26A434 KC carries hundreds of thousands of PAC-authenticated
+     * pointers; even after all plain rebases NO native execution is permitted. */
+    return mac27_kc_plain_rebase(kc, kc_size, owner, window, capacity, report)
+        ? MAC27_SHIM_PLAIN_REBASE : MAC27_SHIM_OK;
+}

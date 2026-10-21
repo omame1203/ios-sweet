@@ -8,6 +8,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [ROOT / p for p in (
     'ports/macos27/kc_loader.c', 'ports/macos27/kc_fixups.c',
+    'ports/macos27/kc_plain_rebase.c',
     'ports/macos27/boot_args.c', 'shim/macos27_kc.c',
 )]
 SHIM_SOURCES = [ROOT / 'shim' / name for name in (
@@ -73,7 +74,7 @@ def main():
                         '-mstrict-align', '-Wall', '-Wextra', '-Werror', '-DBOARD_DIZI',
                         '-DDIZI_MACOS27_PREFLIGHT']
         objects = []
-        for index, source in enumerate([*SHIM_SOURCES, *SOURCES[:3]]):
+        for index, source in enumerate([*SHIM_SOURCES, *SOURCES[:4]]):
             obj = dest / f'linked-{index}.o'
             run(cross, *linker_flags, '-c', source, '-o', obj)
             objects.append(obj)

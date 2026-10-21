@@ -22,12 +22,22 @@ OUT=$(mktemp -d out/mac27-readonly-preflight-XXXXXXXX)
 objects=()
 for src in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c input_diag.c \
            bootlog.c usb_control.c usb_diag.c macos27_kc.c macos27_kc_probe.c \
+           macos27_pac_recovery.c macos27_pac_recovery.S \
            ../ports/macos27/kc_loader.c ../ports/macos27/kc_fixups.c \
+           ../ports/macos27/kc_plain_rebase.c \
            ../ports/macos27/boot_args.c; do
     obj="$OUT/$(printf '%02d' "${#objects[@]}").o"
     "$CC" "${CFLAGS[@]}" -c "$src" -o "$obj"
     objects+=("$obj")
 done
+# This shim is entered as a relocatable Android Linux Image. The startup
+# header legitimately references _end, but absolute relocations in C objects
+# would point at link address zero rather than their ABL-assigned address.
+abs=$(aarch64-linux-gnu-readelf -r "${objects[@]:1}" | grep -c ABS64 || true)
+if [ "$abs" != 0 ]; then
+    echo "Refusing $abs absolute relocations in non-startup objects" >&2
+    exit 1
+fi
 "$CC" "${CFLAGS[@]}" -static -T shim.ld -Wl,--build-id=none \
        -Wl,--no-warn-rwx-segments -Wl,-N "${objects[@]}" \
        -o "$OUT/mac27-preflight-only.elf"

@@ -1,5 +1,57 @@
 # POCO Pad (dizi) → genuine macOS 27 Golden Gate migration
 
+### 2026-10-21 KC unsigned rebase and CPU PAC prototype (not a boot)
+
+- `kc_plain_rebase.{c,h}` and shim `mac27_shim_stage_plain()` perform strict
+  source-validated, two-pass pointer rewriting **ONLY for `isAuth=0`** with
+  format8/cacheLevel0 and first __TEXT header VA+target30, on independently
+  owned staged RAM. Real VMA2: 89,086 plain rebased, 599,964 PAC encodings
+  left intact. Real mac13g: 111,542 plain, 901,819 PAC unchanged. 314/418
+  Python-independent oracle samples incl cross-page pointers, Clang sanitizer,
+  and AArch64 linking all passed. No PAC auth pointer was signed or executed.
+- New `macos27_pac_probe` and `macos27_pac_recovery` modules are opt-in,
+  with exact MRS PC/ESR, staged EL1 exception resume path integrated in shim
+  behind multiple disabled-by-default macros. Gunyah EL2-directed traps are
+  still not recoverable here. The actual Fastboot-accepted diagnostic image
+  was built with PAC reads DISABLED; no per-core PAC ability is established.
+
+## 2026-10-21: temporary GKI diagnostic bootloader acceptance (NOT macOS27 kernel startup)
+
+- Fastboot reported connected unlocked `dizi`, current slot `b`, max download
+  354418688 bytes. Built fresh ignored diagnostic image
+  `shim/out/dizi/mac27-26A434-KC-nojump-review.img` **81,661,952 bytes**,
+  SHA256 `4c809464e32f7760a785f597204f693e9ab506d0fb9039a6ad7af6e077a7b5ee`.
+  Its original 26A434 VMAPPLE `MH_FILESET` is exactly preserved **as inert
+  ramdisk data**; kernel field is a dedicated no-branch AArch64 preflight shim.
+  Sidecar `.review.json` documents SHA-256, header fields, and all NO-JUMP
+  limitations. `tools/macos27-temporary-image.py` built the GKI boot v4
+  image only after checking real KC, BuildManifest hash, complete AArch64
+  Linux Image structure, disassembled shim function targets, GKI offsets,
+  no signature payload and section hashes. 12 negative/host tests passed.
+- With explicit user request to attempt a temporary boot, issued ONLY:
+  `fastboot boot shim/out/dizi/mac27-26A434-KC-nojump-review.img`.
+  Result: `Sending boot.img (79748 KB) OKAY [1.824s]` and
+  `Booting OKAY [0.346s]` (total 2.212s). Subsequent fastboot/adb device
+  queries returned empty. **This confirms loader transport and boot request
+  acceptance, NOT that the shim painted a screen, passed real KC inspection,
+  executed native Apple XNU, mounted APFS, or reached macOS.** No user photo,
+  USB diagnostic, or new runtime trace was obtained. Boot image partitions,
+  original Android/iPadOS partition data and user backups were not written.
+- Read-only machine-word decode of genuine VMAPPLE entry gives
+  `0xfffffe0009eb4480 → 0xfffffe0009eb8070`: physical x0 boot args,
+  reads x20+8/16/24/0x470, initializes TCR_EL1/TTBR1_EL1 tables, then
+  **executes HVC #0 (x0=0xc1000000) BEFORE SCTLR_EL1** and later `AUTDA`.
+  No compatible Qualcomm Gunyah implementation of that guest hypercall has
+  been observed. `entry_handoff_guard.{c,h}` fail-closed checks 14 exact
+  machine instructions and immutable layout against the real 26A434 KC;
+  120k hostile assertions, 14 mutations and AArch64 host build pass. This
+  is an additional earliest-XNU startup blocker beyond PAC/SSV/IOKit.
+- Real macOS27 XNU native entry transfer remains intentionally **prohibited**:
+  millions of format8 KC pointers (599964 auth in vma2 alone), unknown dizi
+  PAC registers/keys and Apple VMAPPLE HVC, absent Qualcomm platform expert,
+  APFS/SSV Preboot trust, IOKit/GPU drivers. This milestone must never be
+  described as a native macOS27 temporary boot.
+
 ## 2026-10-21: iPadOS boot-path reuse and genuine XNU27 no-jump preparation
 
 The established iPadOS16/XNU22 0116 dizi GUI boot is hardware-bringup

@@ -3,6 +3,7 @@
 
 #include "../ports/macos27/kc_loader.h"
 #include "../ports/macos27/kc_fixups.h"
+#include "../ports/macos27/kc_plain_rebase.h"
 #include "../ports/macos27/boot_args.h"
 
 #define MAC27_DIZI_RAM_BASE UINT64_C(0x8c0000000)
@@ -32,7 +33,8 @@ struct mac27_shim_layout {
 
 enum mac27_shim_error {
     MAC27_SHIM_OK = 0, MAC27_SHIM_ARGUMENT, MAC27_SHIM_KC,
-    MAC27_SHIM_FIXUP, MAC27_SHIM_MEMORY, MAC27_SHIM_BOOT_ARGS
+    MAC27_SHIM_FIXUP, MAC27_SHIM_MEMORY, MAC27_SHIM_BOOT_ARGS,
+    MAC27_SHIM_PLAIN_REBASE
 };
 
 /* Prepare a real dizi RAM/ADT/boot-args layout without touching physical RAM.
@@ -50,5 +52,18 @@ int mac27_shim_stage(const void *kc, size_t kc_size,
                      const struct mac27_shim_request *request,
                      const struct mac27_shim_layout *layout,
                      void *window, size_t capacity);
+
+/* Opt-in partial fixup integration: after exact KC/ADT/bootargs staging,
+ * resolve ONLY unauthenticated format-8 pointers in caller-owned RAM.
+ * Every authenticated pointer remains encoded and native_boot_allowed=0.
+ * This does not create a bootable image or grant ownership. If an ownership
+ * claim is false, the caller must never invoke this on physical device RAM.
+ */
+int mac27_shim_stage_plain(const void *kc, size_t kc_size,
+                           const struct mac27_shim_request *request,
+                           const struct mac27_shim_layout *layout,
+                           const struct mac27_kc_plain_ownership *ownership,
+                           void *window, size_t capacity,
+                           struct mac27_kc_plain_report *rebase_report);
 
 #endif

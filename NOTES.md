@@ -1,5 +1,72 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+### Continuation: host KC partial fixup integration and optional PAC probe (2026-10-21)
+
+- `ports/macos27/kc_plain_rebase.{c,h}` and `mac27_shim_stage_plain()` now
+  rebase ONLY the format-8 KC pointers with `isAuth=0` from independently
+  loaded source bytes into explicitly caller-owned RAM. Actual VMAPPLE
+  **89,086 plain rebased; 599,964 authenticated unchanged**; mac13g 111,542
+  plain rebased, 901,819 authenticated unchanged. 314/418 independent Python
+  oracle samples, cross-page pointers, ASan+UBSan hostile checks and AArch64
+  freestanding code compilation/link all passed. A full genuine VMAPPLE KC
+  `mac27_shim_stage_plain()` host RAM pass succeeded. This is NOT runnable
+  XNU: all authenticated PAC pointers still need real signing/key semantics.
+- `shim/macos27_pac_probe.*` and `shim/macos27_pac_recovery.{c,h,S}` implement
+  separately gated passive ISAR1/2 sampling and exact-PC/ESR return-safe EL1
+  synchronous exception prototype. `shim/shim.c` opt-in caller/handler is
+  compiled ONLY with all explicit macros, which the observed temporary
+  diagnostic image DID NOT enable. EL2/Gunyah-routed exceptions remain
+  unhandled and risky, so NO new live PAC register claims were made. Host
+  mock and AArch64 double-opt-in compile/decoder tests passed. Never claim
+  native XNU27 compatibility from a fabricated or isolated PAC observation.
+
+## 2026-10-21: XNU27 preflight GKI v4 **temporary bootloader acceptance**, NOT native XNU27 execution
+
+- Human request: continue until macOS27 can temporarily boot, reusing the
+  iPadOS16.7.16 proven dizi shim. Started on branch `pocopad-macos27` HEAD
+  `21dac58` and preserved ALL existing iPadOS boot images/Android backups,
+  ignored Apple assets, and unrelated `.github/workflows/dizi-host.yml`.
+- Verified current connected fastboot target returned `product: dizi`,
+  `unlocked: yes`, `current-slot: b`, max download 354418688 bytes; no
+  partition write, reboot-to-other-slot, unlock, flash or erase command.
+- Added `tools/macos27-temporary-image.py` and tests. Packager hashes the
+  original genuine 26A434 decompressed VMAPPLE KC (81,444,864 B), checks the
+  saved original BuildManifest, verifies AArch64 Linux Image start/entry,
+  link header, no native XNU branch, GKI header-v4 size/offsets/section SHA,
+  and refuses overwrites. Genuine Apple KC is packaged **only as inert raw
+  ramdisk bytes**, not as the ARM64 Linux boot kernel. The only executable
+  remains the default-disabled opt-in macOS27 preflight shim; it reports
+  blocked without jumping to Apple XNU. 12 packager tests passed.
+- Local ignored image `shim/out/dizi/mac27-26A434-KC-nojump-review.img`,
+  size **81,661,952**, SHA256
+  `4c809464e32f7760a785f597204f693e9ab506d0fb9039a6ad7af6e077a7b5ee`,
+  has `.review.json` with no-jump and no-boot-success assertions.
+- **First actual fastboot session**: `fastboot boot` of this preflight image
+  returned `Sending boot.img (79748 KB) OKAY [1.824s]`,
+  `Booting OKAY [0.346s]`, `Finished. Total time: 2.212s`.
+  After command, `fastboot devices` and `adb devices` displayed no device.
+  This proves ONLY Fastboot transfer/boot-command acceptance, **not** the
+  diagnostic screen output, successful KC preflight on silicon, first XNU27
+  instruction, kernel initialization, GUI or OS execution; there is no
+  received user photo/runtime log. The diagnostic remains deliberately parked
+  with no XNU27 jump, GIC/MMU/USB/UFS probing or auto-reset.
+- Actual native macOS27 XNU temporary boot is still **BLOCKED**, not claimed.
+  The 26A434 KC has hundreds of thousands of authenticated format-8 PAC
+  pointers; hardware PAC/EL2 privilege, correct KC signed relocation, Apple
+  platform drivers/ADT and APFS/SSV/SEP preboot trust are not ready. Linux
+  `cpu.txt` not advertising paca/pacg is negative evidence but not a per-core
+  ID_AA64ISAR1/2 silicon register observation. Do not bypass with NOP/PAC
+  stripping or label the no-jump diagnostic as a successful macOS boot.
+- Actual 26A434 VMAPPLE entry decode adds another independent early blocker:
+  entry 0xfffffe0009eb4480 branches to 0xfffffe0009eb8070, reads x20+8/16/
+  24/0x470, programs TCR_EL1 and TTBR1_EL1, then executes **`HVC #0` with
+  x0=0xc1000000 before setting SCTLR_EL1**, and later contains `AUTDA`.
+  Gunyah/Qualcomm firmware has NO observed compatible handler contract for
+  this Apple VMAPPLE hypercall; skipping or NOPing it is not a valid port.
+  Portable `ports/macos27/entry_handoff_guard.{c,h}` checks the exact genuine
+  26A434 machine words and rejects any unproven EL1/platform handoff; its
+  host sanitizer/120k spoof/14 mutation/AArch64 compilation tests PASS.
+
 ## 2026-10-21: genuine XNU27 boot-attempt preparation, no-jump boundary
 
 - **Goal still native macOS27 on dizi, ultimately all hardware.** The user

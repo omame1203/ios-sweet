@@ -61,6 +61,16 @@ static void synthetic_shim(void)
     assert(!strcmp(ba->command_line, line));
     for (size_t i = sizeof(*ba); i < MAC27_KC_PAGE; ++i)
         assert(window[layout.boot_args_pa - PHYS + i] == 0);
+    struct mac27_kc_plain_ownership owner = {PHYS, MEMORY, PHYS, MEMORY, 1};
+    struct mac27_kc_plain_report plain_report = {0};
+    memset(window, 0xa5, cap + 1);
+    /* This compact fixture locates a fixup in an executable segment.
+     * The stricter plain resolver MUST refuse it instead of writing code. */
+    assert(mac27_shim_stage_plain(kc, FILE_BYTES, &req, &layout, &owner,
+                                  window, cap, &plain_report) == MAC27_SHIM_PLAIN_REBASE);
+    assert(plain_report.plain_rebased == 0 && plain_report.authenticated_preserved == 0);
+    assert(!memcmp(window + prefix + 0x8100, kc + 0x8100, 8));
+    assert(!layout.native_boot_allowed && window[cap] == 0xa5);
     /* Fail closed before touching even a single destination byte. */
     memset(window, 0xa5, cap);
     req.reserved_count = 1;
@@ -86,7 +96,7 @@ static void synthetic_shim(void)
     fixup_fixture(kc);
     put32(kc + 8, 0); /* Reject a fabricated plain ARM64 KC from the shim. */
     assert(mac27_shim_plan(kc, FILE_BYTES, &req, &layout) == MAC27_SHIM_KC);
-    puts("PASS dizi shim: genuine format8 auth-chain scan, ADT/1152-byte boot args staged, overlap/capacity/forgery rejected, no jump");
+    puts("PASS dizi shim: genuine format8 auth-chain scan, ADT/1152-byte boot args and partial plain rebase staged, overlap/capacity/forgery rejected, no jump");
     free(window); free(kc);
 }
 
@@ -104,6 +114,19 @@ static void real_shim(const char *path)
     assert(mac27_shim_plan(kc, (size_t)n, &req, &layout) == 0);
     assert(!layout.native_boot_allowed && layout.fixups.pointers > 0);
     assert(layout.fixups.authenticated > 0);
+    if (strstr(path, "kernel.vma2.macho")) {
+        struct mac27_kc_plain_ownership owner = {PHYS, MEMORY, PHYS, MEMORY, 1};
+        struct mac27_kc_plain_report plain = {0};
+        size_t cap = (size_t)(layout.top_pa - PHYS);
+        unsigned char *window = malloc(cap); assert(window);
+        memset(window, 0xa5, cap);
+        assert(mac27_shim_stage_plain(kc, (size_t)n, &req, &layout, &owner,
+                                      window, cap, &plain) == MAC27_SHIM_OK);
+        assert(plain.plain_rebased == 89086 && plain.authenticated_preserved == 599964);
+        assert(!layout.native_boot_allowed);
+        free(window);
+        puts("PASS genuine VMA2 shim: 89,086 plain pointers rebased in host RAM, all 599,964 PAC fixups remain encoded; no entry");
+    }
     printf("PASS real KC shim layout %s: %" PRIu64 " chains (%" PRIu64 " authenticated), 16KiB boot args PA 0x%" PRIx64 " (no execution)\n",
            path, layout.fixups.pointers, layout.fixups.authenticated, layout.boot_args_pa);
     free(kc);
