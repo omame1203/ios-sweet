@@ -1,0 +1,26 @@
+## @file
+# Renegade Project dizi UEFI DXE milestone: source-only, read-only GOP proof.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = DiziDiagDxe
+  FILE_GUID                      = 7D016CA4-4D63-41B0-8746-2D4744A14335
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = DiziDiagEntry
+
+[Sources]
+  DiziDiagDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid
+
+[Depex]
+  gEfiGraphicsOutputProtocolGuid

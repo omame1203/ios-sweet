@@ -1,0 +1,7 @@
+edk2-msm board identity: Xiaomi POCO Pad dizi SM7435 2405CPCFBG
+Source: rooted Android 16 captured FDT, backup/dizi/fdt, 2026-10-20
+Verified GICD=0x17200000 GICR=0x17260000 virtual timer PPI=27
+Verified inherited scanout physical=0xb8000000 size=0x02b00000
+Inherited visible pixels=1600x2560 stride=6400 bytes/pixel=4
+No verified ACPI tables, UFS firmware protocol, or device-specific DXE.
+This record does NOT prove a bootable, tested, or flashable firmware.

@@ -1,6 +1,103 @@
 # Renegade Project / EDK2 port to POCO Pad (`dizi`, SM7435)
 
-**Status, 2026-10-21: hardware source audit only; NOT an EDK2 build or boot.**
+**Status, 2026-10-21: SM7435 EDK2 source port and isolated AArch64 DEBUG
+firmware build now exist; NO Renegade UEFI boot on the POCO Pad.**
+
+## 2026-10-21 implementation and firmware build checkpoint
+
+The initial hardware preflight was followed by new **source** in
+`ports/renegade/edk2-overlay/` targeting the pinned current Renegade
+`edk2-msm` revision `e1952621f419f8db60ed28271264e1b5184c571d`:
+
+- `Silicon/Qualcomm/sm7435`: own SoC package, firmware memory map, PrePi
+  and PEI library sources, externally attested RAM admission. Before any
+  independent owner verifier is connected, the memory-map implementation
+  publishes **no usable RAM** and PrePi cannot normally proceed.
+- `Platform/Qualcomm/sm7435`: distinct parent DSC/FDF using public EDK2
+  components rather than copying older proprietary Qualcomm/EFI binaries.
+- `Platform/Xiaomi/sm7435`: dizi board DSC, FV inclusion, board evidence,
+  and actual `DiziDiagDxe` DXE source. The DXE consumes and checks a real
+  GOP protocol but there is **no active dizi GOP provider**. Compilation
+  and EFI linking do not imply DXE dispatch, video output or Boot Services.
+- `configs`: guarded dizi configuration. `FD_BASE` and `FD_SIZE` remain
+  intentionally unspecified until the boot-time physical/virtual memory
+  contract and exclusive ownership are independently validated.
+- `tools/dizi-renegade-overlay.py`: pin-checked audit and new-workspace
+  preparation; `tools/dizi-renegade-basetools.sh`: host GCC GNU17 workaround;
+  `tools/dizi-renegade-image.py`: strict *nonbooting by default* GKI boot v4
+  packager. It has no approved entry-wrapper hash and rejects unreviewed input.
+- `tools/dizi-renegade-bootentry-audit.py`: read-only original dizi
+  `boot_a.img`/`vendor_boot_a.img`/`abl_a.img`/FDT and upstream BootShim
+  transport review. The CLI returns status `BLOCKED` and exit code 2 by
+  design, even for structurally consistent headers; no output firmware,
+  allowlist, boot image or device access is created.
+
+An independent **temporary** public-source build staging area under
+`/tmp/dizi-edk2-msm-genuine-dizi-debug-20261021-w9` successfully ran a
+genuine AArch64 `DEBUG_GCC5` EDK2 compilation and GenFds step. The clean
+`WORKSPACE=.../verify-cold` build log records `- Done -` at 17:59:58 JST
+and produced a 4,194,304-byte `SM7435_UEFI.fd`, with `_FVH` at byte 40
+and an advertised FV length of `0x400000`. Its authoritative **cold build**
+SHA-256 is `8326f9cdfd3db67eb3a924d6ceff15df98256f6aef23e21112fd06b0935497d5`.
+The earlier incremental 4-MiB FD had a different hash; do not identify
+incremental and cold build artifacts as identical.
+The staging area initially contained temporary open-source library
+resolutions and GCC16/C23 compatibility workarounds. Final public library
+mappings and RAM layout were merged into this source overlay before the cold
+rebuild. All 18 staged overlay files were checked byte-for-byte against
+the repository's then-current overlay. This is
+**reproducible host firmware output**, not execution or exclusive memory
+ownership; hardware verification must precede any boot claim.
+
+The exact commands, dependency gitlink revisions and host toolchain wrappers
+are recorded in the isolated stage's `DIZI_DEBUG_BUILD_REPORT.md`.
+`-D FD_BASE=0x90000000 -D FD_SIZE=0x00400000` were used as compile-time
+diagnostic values ONLY, not an assertion that ABL owns that physical RAM.
+Furthermore, the standalone strict v4 image packager currently requires
+a high-RAM FD address, whereas the genuine FDF candidate is low-RAM;
+it must remain blocked until one coherent independently reviewed physical
+load/entry/FD region contract has been proved.
+
+The captured dizi boot partition uses v4 header size 1584, a 46,854,828-byte
+kernel, 1,380,093-byte boot ramdisk and 4096-byte signature. `vendor_boot_a`
+is v4, and the saved ABL is an **ARM32 ELF** (not an AArch64
+Linux Image entry stub). Actual upstream BootShim (`BootShim.S`, 144-byte
+binary) uses `ADR`, 16-byte copy operations and an unverified jump into
+an inherited `0xce000000` FD destination intended for another SoC. It lacks
+an independently reviewed dizi entry proof, FDT/FD range verification and
+cache/MMU ownership transition. Its upstream packaging
+`gzip(BootShim + FD) + DTB` is also different from the guarded GKI-v4
+Image+FV-in-ramdisk design. Merely changing the FD address cannot repair
+those differences.
+
+**Crucially, an FD is a firmware container, not an Android `fastboot boot`
+image.** The current upstream BootShim/DTB/gzip combination is not proven
+to satisfy the dizi ABL/GKI-v4 entry ABI; do not disguise it as an executable
+Linux Image. Required attestation of the current dynamic FDT reservations,
+16-MiB candidate at `0x90000000`, executable/writable mapping, entry EL/MMU,
+Gunyah/EL2/XPU permissions and ABL ownership is not available. No Renegade
+boot image has been approved, no `fastboot boot` of this FD has been attempted,
+and **no flash operation was performed**. Earlier iPadOS graphics and CPU
+diagnostics are independent results, not evidence that EDK2 reached DXE.
+
+For repeatable, non-device host review from this repository, run:
+
+```sh
+python3 tools/dizi-renegade-overlay.py
+python3 tests/test-dizi-renegade-preflight.py
+python3 tests/test-dizi-renegade-overlay.py
+python3 tests/test-dizi-renegade-basetools.py
+python3 tests/test-dizi-renegade-config.py
+python3 tests/test-dizi-renegade-silicon.py
+python3 tests/test-dizi-renegade-soc-parent.py
+python3 tests/test-dizi-renegade-platform.py
+python3 tests/test-dizi-renegade-diag.py
+python3 tests/test-dizi-renegade-image.py
+python3 tests/test-dizi-renegade-bootentry-audit.py
+```
+
+All `tests/test-dizi-renegade-*` are **host tests**; passing them cannot
+verify GIC/GOP/SEC runtime ownership or guarantee a device will boot.
 
 ## Scope and source provenance
 

@@ -1,0 +1,25 @@
+## @file
+# SM7435 fail-closed early platform initialization.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION   = 0x00010005
+  BASE_NAME     = DiziSm7435PlatformPrePiLib
+  FILE_GUID     = 62B6FFEF-0D59-4EC7-B68D-11E1958D7435
+  MODULE_TYPE   = SEC
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS = PlatformPrePiLib
+
+[Sources]
+  PlatformUtils.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+  Silicon/Qualcomm/sm7435/sm7435.dec
+
+[LibraryClasses]
+  BaseLib
+  PlatformMemoryMapLib

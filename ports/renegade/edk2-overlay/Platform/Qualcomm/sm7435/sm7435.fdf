@@ -1,0 +1,107 @@
+## @file
+# Renegade edk2-msm / Qualcomm SM7435 minimal open-source FV.
+# Included by Platform/Xiaomi/sm7435/dizi.dsc as FLASH_DEFINITION.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+# The 4 MiB FD layout is ONLY a candidate inside the Silicon gate's
+# 0x90000000..0x90ffffff low-memory window, but its memory descriptor is
+# EFI_RESOURCE_MEMORY_RESERVED/EfiReservedMemoryType, NOT conventional RAM.
+# Adjacent FDT+exception vectors 0x90400000..0x90410000 and SEC stack
+# 0x90fc0000..0x91000000 are excluded from PEI conventional heap HOBs.
+# The device configs purposely
+# withhold FD_BASE/FD_SIZE: caller must not use donor 0xce000000 placement.
+# FDF itself has no permission to claim ABL/Gunyah/XPU exclusive ownership.
+# The silicon PlatformInitialize path defaults to CpuDeadLoop before PEI;
+# no EDK2 boot or safe placement has been demonstrated on POCO Pad.
+#
+# REQUIRED externally verified build args: FD_BASE (expected 0x90000000
+# candidate), FD_SIZE (0x00400000); no arbitrary high RAM or flash writes.
+##
+
+[FD.sm7435_UEFI]
+BaseAddress   = $(FD_BASE)|gArmTokenSpaceGuid.PcdFdBaseAddress
+Size          = $(FD_SIZE)|gArmTokenSpaceGuid.PcdFdSize
+ErasePolarity = 1
+BlockSize     = 0x00001000
+NumBlocks     = 0x400
+
+# Must equal 4 MiB if externally provided FD_SIZE is 0x00400000.
+# No additional recovery, unsigned OEM DXE, vendor blobs or ACPI regions.
+0x00000000|0x00400000
+gArmTokenSpaceGuid.PcdFvBaseAddress|gArmTokenSpaceGuid.PcdFvSize
+FV = FVMAIN_COMPACT
+
+[FV.FvMain]
+BlockSize          = 0x40
+NumBlocks          = 0
+FvAlignment        = 8
+ERASE_POLARITY     = 1
+MEMORY_MAPPED      = TRUE
+STICKY_WRITE       = TRUE
+LOCK_CAP           = TRUE
+LOCK_STATUS        = TRUE
+WRITE_DISABLED_CAP = TRUE
+WRITE_ENABLED_CAP  = TRUE
+WRITE_STATUS       = TRUE
+WRITE_LOCK_CAP     = TRUE
+WRITE_LOCK_STATUS  = TRUE
+READ_DISABLED_CAP  = TRUE
+READ_ENABLED_CAP   = TRUE
+READ_STATUS        = TRUE
+READ_LOCK_CAP      = TRUE
+
+  # No upstream donor APRIORI file: it starts unverified GIC, timer,
+  # filesystem, USB and vendor-specific DXEs. Dependency order is EDK2's.
+  INF MdeModulePkg/Core/Dxe/DxeMain.inf
+  INF MdeModulePkg/Universal/PCD/Dxe/Pcd.inf
+  INF ArmPkg/Drivers/CpuDxe/CpuDxe.inf
+  INF MdeModulePkg/Core/RuntimeDxe/RuntimeDxe.inf
+  INF MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf
+  INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+  INF MdeModulePkg/Universal/HiiDatabaseDxe/HiiDatabaseDxe.inf
+  INF MdeModulePkg/Universal/PrintDxe/PrintDxe.inf
+  INF MdeModulePkg/Universal/DevicePathDxe/DevicePathDxe.inf
+  INF MdeModulePkg/Universal/Console/ConPlatformDxe/ConPlatformDxe.inf
+  INF MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
+  INF MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
+
+  # The board-specific freeform evidence contains ONLY public identification
+  # and explicit no-boot disclaimers. It is not an SMBIOS/ACPI substitute.
+!include $(DEVICE_DXE_FV_COMPONENTS)
+
+  # No actual GOP driver exists for dizi. GraphicsConsole/Shell are source
+  # compile candidates only and remain excluded by default. Enabling these
+  # still requires independent display ownership, GIC/timer and input paths.
+!if $(DIZI_SM7435_ENABLE_CONSOLE_SHELL) == TRUE
+  INF MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsoleDxe.inf
+  INF ShellPkg/Application/Shell/Shell.inf
+!endif
+
+[FV.FVMAIN_COMPACT]
+FvAlignment        = 8
+ERASE_POLARITY     = 1
+MEMORY_MAPPED      = TRUE
+STICKY_WRITE       = TRUE
+LOCK_CAP           = TRUE
+LOCK_STATUS        = TRUE
+WRITE_DISABLED_CAP = TRUE
+WRITE_ENABLED_CAP  = TRUE
+WRITE_STATUS       = TRUE
+WRITE_LOCK_CAP     = TRUE
+WRITE_LOCK_STATUS  = TRUE
+READ_DISABLED_CAP  = TRUE
+READ_ENABLED_CAP   = TRUE
+READ_STATUS        = TRUE
+READ_LOCK_CAP      = TRUE
+
+  INF Silicon/Qualcomm/QcomPkg/PrePi/PrePi.inf
+
+  # Renegade PrePi decompresses this inner FV before DXE dispatch.
+  # Compression GUID matches the checked upstream sm7325/sm8550 FDF.
+  FILE FV_IMAGE = 9E21FD93-9C72-4C15-8C4B-E77F1DB2D792 {
+    SECTION GUIDED EE4E5898-3914-4259-9D6E-DC7BD79403CF PROCESSING_REQUIRED = TRUE {
+      SECTION FV_IMAGE = FVMAIN
+    }
+  }
+
+!include Silicon/Qualcomm/QcomPkg/QcomCommonFdf.inc

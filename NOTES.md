@@ -1,5 +1,43 @@
 # POCO Pad port: macOS 27 new target; iPadOS 16 / sweet research retained
 
+## 2026-10-21: Native Renegade EDK2/UEFI source port and REAL DEBUG FD build
+
+- The user's current priority is **Renegade Project's UEFI itself executing
+  on POCO Pad dizi**, not a rebranded shim screen or just reuse for macOS27.
+  Current outcome is a *real EDK2 AArch64 build*, **NOT a device boot**.
+- Created a source-only SM7435 silicon/DSC/FDF and dizi board overlay under
+  `ports/renegade/edk2-overlay/` for `edk2-msm` pinned at `e1952621`.
+  The minimal open-source firmware includes 14 AArch64 PE32+ modules and
+  `DiziDiagDxe` (a true GOP-dependent driver). Its GOP dependency cannot
+  resolve on-device because no proven dizi GOP driver is enabled. No donor
+  UFS/USB/ACPI/SMI DXEs or proprietary EFI modules were included.
+- The isolated `/tmp/dizi-edk2-msm-genuine-dizi-debug-20261021-w9` genuine
+  `DEBUG_GCC5` compilation and GenFds succeeded on 2026-10-21 17:59 JST.
+  **cold-build** `SM7435_UEFI.fd` has 4,194,304 bytes, FV header `_FVH`
+  at offset `0x28` and length `0x400000`, SHA256
+  `8326f9cdfd3db67eb3a924d6ceff15df98256f6aef23e21112fd06b0935497d5`.
+  (The earlier incremental FD had a different SHA and is NOT authoritative.)
+  Public GNU17 compatibility wrappers were needed for GCC16/C23. A final
+  stage/source check found all 18 overlay files identical after corrections.
+- Corrected the candidate 16-MiB region `[0x90000000,0x91000000)` into
+  nonoverlapping FD/FV 4MiB, FDT+vectors 64KiB, heap 0xBB0000 bytes,
+  and SEC stack 256KiB. `GetPlatformMemoryMap` admits conventional RAM only
+  after explicit trusted evidence; there is still **no on-device verifier**.
+  Upstream Qcom PrePi writes to the FDT/vector/stack slots *before* calling
+  PlatformInitialize; static PCD nonoverlap is NOT a safe entry guarantee.
+- Actual saved dizi boot transport is Android GKI header v4. The upstream
+  donor BootShim is NOT a reviewed dizi ABL/EL1/physical-FDT-compatible
+  wrapper. The strict boot packager retains an empty wrapper allowlist.
+  Additional read-only tool `tools/dizi-renegade-bootentry-audit.py`
+  verifies actual saved boot/vendboot/ABL/FDT headers and confirms the
+  upstream gzip(BootShim+FD)+DTB transport differs from our Image+FV-in-
+  ramdisk v4 packager. The low `0x90000000` FD candidate is DDR membership,
+  **not** live ownership, and contradicts that packager's high-RAM gate.
+  Therefore this genuine FD was NOT packaged for device boot; NO new
+  `fastboot boot`, NO flash, NO erase and NO partition changes were made.
+- Host tests and exact build details: `docs/DIZI_RENEGADE_EDK2_PORT.md`.
+  Existing Android, iPadOS, macOS27 code/backup assets remain untouched.
+
 ## 2026-10-21: Renegade Project EDK2 porting guide assessed for dizi
 
 - User linked `https://renegade-project.tech/en/porting` and requested reuse

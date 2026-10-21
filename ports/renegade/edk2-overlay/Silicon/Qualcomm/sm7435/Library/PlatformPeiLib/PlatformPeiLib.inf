@@ -1,0 +1,33 @@
+## @file
+# SM7435 minimal PEI firmware-volume HOB; no donor firmware location.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION    = 0x00010005
+  BASE_NAME      = DiziSm7435PlatformPeiLib
+  FILE_GUID      = 5395FAC5-3D08-4C3F-950B-99F08DA97435
+  MODULE_TYPE    = SEC
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS  = PlatformPeiLib
+
+[Sources]
+  PlatformPeiLib.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+  Silicon/Qualcomm/sm7435/sm7435.dec
+
+[LibraryClasses]
+  HobLib
+  PcdLib
+  PlatformMemoryMapLib
+
+[Pcd]
+  gArmTokenSpaceGuid.PcdFvBaseAddress
+
+[FixedPcd]
+  gArmTokenSpaceGuid.PcdFvSize

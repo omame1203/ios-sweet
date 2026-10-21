@@ -1,0 +1,26 @@
+## @file
+# SM7435/dizi strict, no-unverified-memory-admission map.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION   = 0x00010005
+  BASE_NAME     = DiziSm7435PlatformMemoryMapLib
+  FILE_GUID     = 991CA138-89CE-4AAC-9664-A01DD975A43C
+  MODULE_TYPE   = BASE
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS = PlatformMemoryMapLib
+
+[Sources]
+  PlatformMemoryMapLib.c
+  DiziSm7435Memory.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+  Silicon/Qualcomm/sm7435/sm7435.dec
+
+[LibraryClasses]
+  BaseLib

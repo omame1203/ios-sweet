@@ -1,0 +1,15 @@
+## @file
+# Qualcomm SM7435/parrot package — POCO Pad dizi only.
+# No guessed DXE vendor modules, ACPI blobs or runtime PCDs.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  DEC_SPECIFICATION = 0x0001001A
+  PACKAGE_NAME      = Sm7435DiziPkg
+  PACKAGE_GUID      = 7141669B-1EB9-4CE5-A5C1-EBCF0E0E7435
+  PACKAGE_VERSION   = 0.1
+
+[Includes]
+  Include
+
+[PcdsFixedAtBuild.common]
