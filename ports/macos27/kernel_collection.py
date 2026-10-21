@@ -179,11 +179,17 @@ def inspect(data: bytes) -> dict:
     if entry is None or not any(s['initprot'] & 4 and s['vmaddr'] <= entry < s['vmaddr'] + s['filesize']
                                 for s in outer['segments']):
         raise ValueError('Kernel entry is outside file-backed executable segments')
+    # CPU_SUBTYPE_MASK is 0xff000000, not 0xffffff00. In particular subtype
+    # 12 (ARM64E_X1) is also PAC, whereas unknown subtype 0x102 is not ARM64E.
+    # LLVM BinaryFormat/MachO.h and Apple Xcode27's mach/machine.h taxonomy.
+    subtype = kernel['cpu_subtype'] & 0x00FFFFFF
+    arch = {0: 'arm64', 1: 'arm64v8', 2: 'arm64e', 12: 'arm64e.x1'}.get(
+        subtype, f'arm64.subtype{subtype}')
     return dict(format='MH_FILESET' if outer['filetype'] == MH_FILESET else 'MH_EXECUTE',
                 darwin='.'.join(m.decode() for m in match.groups()),
                 darwin_major=int(match[1]), version_string=version,
                 observed_xnu_tag=source[1] if source else None,
                 configuration=source[2] if source else None,
-                cpu_subtype=kernel['cpu_subtype'], arm64e=(kernel['cpu_subtype'] & 0xFF) == 2,
+                cpu_subtype=kernel['cpu_subtype'], cpu_arch=arch, arm64e=subtype in (2, 12),
                 entry_va=entry, segments=outer['segments'],
                 fileset_entries=outer['entries'], chained_fixups=_chain_layout(data, outer))

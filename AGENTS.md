@@ -32,3 +32,9 @@
   Android/firmware/Apple backups; never flash, erase or repartition without
   explicit approval of a concrete operation.
 - Keep device dumps, serial numbers and downloaded Apple artifacts out of git.
+- macOS27 offline System/Cryptex/BaseSystem images now match their decoded
+  BuildManifest SHA-384. `ports/macos27/boot_args.*` implements a separate
+  1152-byte boot-argument serializer (1024-byte command line), checked against
+  actual 26A434 entry loads. The legacy iPadOS shim still uses 736 bytes.
+  Neither the encoder nor downloaded images constitute a native macOS boot
+  route; fileset loading/fixups, PAC and platform drivers remain unresolved.

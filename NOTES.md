@@ -33,6 +33,62 @@
   separate branch and scratch paths; never use synthetic entitlement or
   version spoofing as a substitute for functioning real macOS.
 
+### Latest: actual System images and modern boot-argument implementation (2026-10-21)
+
+- Acquired Apple's real 26A434 **System**, **Cryptex1,SystemOS**, and
+  **BaseSystem** images via bounded HTTP range extraction. Decrypted with
+  `ipsw fw aea` using Apple's publicly provided FCS keys; all three **decoded
+  APFS images** match the original BuildManifest SHA-384. The OS digest does
+  NOT match encrypted `.aea` bytes: the initially reported mismatch was
+  resolved by hashing the decoded image. Do not generalize the wrapped-KC
+  digest rule to these disk images. Also matched SystemVolume root_hash and
+  StaticTrustCache to their own manifest components.
+- Retained ignored `research/macos27-26A434/decrypted-os/043-70867-640.dmg`
+  (14,189,330,432 B), `decrypted-system-cryptex/043-70701-651.dmg`
+  (2,879,389,696 B), `decrypted-base-system/022-20292-678.dmg`
+  (1,827,862,528 B). Exact hashes are in corresponding `*-receipt.json`
+  and the migration doc. Removed ONLY newly downloaded encrypted duplicates
+  after successful decoded digest checks to preserve host disk space. The
+  OS raw image's zero ranges were made sparse, then its logical SHA checked.
+  Original iPadOS/Android images, backups and device storage were untouched.
+- Read-only APFS inspection found the actual System-volume macOS27.0.1 /
+  26A434 plist, launchd, dyld, Finder, Dock and WindowServer. The cryptex has
+  genuine `dyld_shared_cache_arm64e` and subcaches. Saved metadata in ignored
+  `system-artifacts/inventory.json` and `cryptex-dyld-cache-inventory.json`.
+  These are offline Apple files, NOT observed processes or a desktop boot.
+  All three read-only FUSE mounts were unmounted after inspection.
+  The installer System image has a System-role volume but no Data/Preboot
+  group or snapshots; installed SSV/boot policy has not been constructed.
+- Resolved subtype12 as **arm64e.x1**, also PAC, from primary LLVM/Apple
+  references. Fixed reader masking to the full 24-bit subtype and recognize
+  both PAC variants. Actual launchd contains authenticated branch/return
+  instructions. Saved Android cpu.txt advertises no paca/pacg and cmdline
+  has no nopauth; this is a saved Android observation, NOT a fresh per-core
+  ISAR read or a working software-PAC/native macOS execution path.
+- **New loader source:** actual VMAPPLE kernel entry `0xfffffe0009eb4480`
+  branches to `0xfffffe0009eb8070`, where native instructions read
+  x20+8/16/24 and **x20+0x470** (flags). Legacy `shim/loader.c` provides only
+  736 bytes, so that tail read is outside its boot_args struct. The old shim
+  actually zeroes/reserves a full 16-KiB page; this is an unpopulated tail,
+  NOT evidence of an unmapped read or a diagnosed macOS crash. Added separate
+  `ports/macos27/boot_args.{c,h}`: 1024-byte command line, 1152-byte struct,
+  virtual ADT pointer, bounded RAM/placement/video/command-line serialization.
+  Public xnu-12377 ARM64 boot.h is a layout reference, NOT macOS27 source.
+  Tests decode the actual 26A434 entry LDRs and consume the C encoder output;
+  all four native entry-read values match. Legacy shim remains unchanged.
+- Validation: new encoder ASan/UBSan tests, freestanding AArch64 object
+  compilation (no unresolved runtime calls), actual-KC entry checks,
+  collection 8 tests, preflight 9 tests and repository validator pass.
+  No macOS27 kernel source compile/link, fileset fixup or board boot occurred.
+- Exact xnu-13432.1.9 public ref and macos-270 source manifest were rechecked
+  and still unavailable (404 / no matching git tag); no new local source or
+  macOS27 SDK found. Asked user asynchronously for another source/artifact
+  location; no location provided yet. Missing source is not proof that
+  binary bring-up can be skipped: actual entry analysis yielded the boot ABI
+  implementation above. Next: validate KC mapping/self-fixup/PAC/native
+  platform route against the real binary before changing any boot image.
+  **The full native macOS27 objective remains active and unachieved.**
+
 ### New actual macOS27 artifact checkpoint (2026-10-21)
 
 - Retrieved the genuine macOS **27.0.1 / 26A434** UniversalMac restore

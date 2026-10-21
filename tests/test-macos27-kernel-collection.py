@@ -59,6 +59,20 @@ class KernelCollectionTests(unittest.TestCase):
         self.assertEqual(k['fileset_entries'][0]['fileoff'], 4096)
         self.assertEqual(k['entry_va'], BASE+4608)
 
+    def test_x1_is_pac_and_full_subtype_is_preserved(self):
+        for subtype, arch, pac in ((0xC0000002,'arm64e',True),
+                                    (0x8000000C,'arm64e.x1',True),
+                                    (0,'arm64',False),
+                                    (0xC0000102,'arm64.subtype258',False)):
+            with self.subTest(subtype=subtype):
+                data=fixture()
+                struct.pack_into('<I',data,8,subtype)
+                struct.pack_into('<I',data,4096+8,subtype)
+                k=inspect(bytes(data))
+                self.assertEqual(k['cpu_arch'],arch)
+                self.assertEqual(k['arm64e'],pac)
+                self.assertEqual(k['cpu_subtype'],subtype)
+
     def test_rejects_malformed_commands_ranges_and_entry(self):
         for offset, fmt, value in (
             (16, '<I', 4097), (20, '<I', 7), (36, '<I', 0),

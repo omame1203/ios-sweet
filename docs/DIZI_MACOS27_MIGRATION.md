@@ -35,7 +35,7 @@ The known-good device checkpoint is the **iPadOS 16 / XNU 22.6.0** port:
 | Display | 1600×2560 panel / centered iPad framebuffer | WindowServer, IOAccelerator, Metal/AGX and GPU/display scheduling absent |
 | Power/Home | Physical power and volume-up→Home works | Native macOS keyboard/mouse/trackpad HID integration incomplete |
 | Touch | Novatek/GPI/SE9 software models through 0120 | GPI/QUP SIDs 0x416/0x403 are not authorized to DMA; physical touch off |
-| macOS userspace | **None** | `launchd`, `dyld`, `WindowServer`, APFS root and Apple-signed macOS27 resources needed |
+| macOS userspace | **No runtime evidence**; genuine files now available offline | Native launchd/WindowServer execution, installed APFS root and boot policy still needed |
 
 The last 0120 kernel output (`xnu/out-0120/kernel.development.sweet`) has
 `Darwin Kernel Version 22.6.0` embedded in the binary. It was compiled
@@ -149,6 +149,69 @@ desktop System/Data volume group, and no Apple process was executed.
 `ipsw extract --sys-ver --remote` is unsupported; use the plist extracted
 from the readonly image. Private `provenance.json` records tool/source and
 component hashes; `preflight-vma2.json` records the combined checks.
+
+## Actual System/Cryptex/BaseSystem and boot ABI follow-up
+
+All three decoded APFS images now match their **own** original 26A434
+BuildManifest SHA-384. For these components the digest applies to the decoded
+image, not encrypted `.aea` bytes. The original encrypted OS file passed ZIP
+CRC-32 but its flat SHA-384 differed; the decoded OS exactly matches the
+manifest. AEA decoding also completed its integrity checks. This does not
+independently validate Apple boot-policy signatures or an installed SSV seal.
+
+| Component | Retained decoded file under ignored `research/macos27-26A434/` | Bytes / SHA-256 |
+|---|---|---|
+| OS / System | `decrypted-os/043-70867-640.dmg` | 14,189,330,432 / `fbfb1a38af09d65dc86bb9814a13b870d1895e4c435c38fde42e00b52cff21b3` |
+| Cryptex1,SystemOS | `decrypted-system-cryptex/043-70701-651.dmg` | 2,879,389,696 / `5fea3f16f856f3aa1b3f88aa3cedfe75977a36f70a17041d6cf6349ba9a0e4d2` |
+| BaseSystem | `decrypted-base-system/022-20292-678.dmg` | 1,827,862,528 / `a4c987540a2f1feb3ee9cb7a9fdc6e8570544200c0bc8e20ad7924c2b586b2cc` |
+
+Encoded intermediates created in this follow-up were removed only after the
+decoded image matched the manifest; receipts retain their hashes and the
+Apple URL. Original device/iPadOS backups remain intact. The raw OS image's
+zero ranges were made sparse before computing its matching logical hash.
+
+Readonly inspection found genuine macOS27.0.1/26A434 SystemVersion metadata,
+launchd, dyld, Finder, Dock and WindowServer. The selected cryptex includes
+`dyld_shared_cache_arm64e` and subcaches. The System image contains a
+System-role volume without a Data/Preboot group or snapshots: these installer
+inputs are not an installed bootable disk. No Apple process was executed.
+
+The full System executables have ARM64 subtype2 and subtype12 slices.
+[LLVM's architecture definitions](https://github.com/llvm/llvm-project/blob/main/llvm/include/llvm/BinaryFormat/MachO.h)
+identify subtype12 as `ARM64E_X1` / `arm64e.x1`; [Apple's Xcode27 notes](https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes)
+describe its additional hardware-checked pointer arithmetic. It is also a
+PAC architecture. The reader now uses the entire 24-bit subtype and preserves
+unknown variants. Saved dizi Android features lack paca/pacg; the actual
+launchd disassembly contains authenticated return/branch instructions. This
+does not demonstrate a native PAC execution path, nor a fresh per-core ISAR
+measurement. Selecting subtype12 is not a plain-arm64 fallback.
+
+Actual VMAPPLE KC entry `0xfffffe0009eb4480` branches to
+`0xfffffe0009eb8070`. The first boot-argument loads through x20 read offsets
+8/16/24 and **0x470**, while the legacy shim struct ends at 736 bytes. Its
+16-KiB allocation is zeroed, so the layout mismatch is **not** proof of an
+unmapped access or an observed macOS crash: the new tail fields are simply
+not populated by the old struct.
+
+`ports/macos27/boot_args.{c,h}` now implements the separate modern layout:
+1152 bytes, 1024-byte command line, flags at 0x470, actual memory size at
+0x478, virtual ADT pointer and checked placement/overflow/video/cmdline
+encoding. The public [xnu-12377 ARM64 boot.h](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.121.6/pexpert/pexpert/arm64/boot.h)
+is a layout reference, **not** corresponding macOS27 kernel source. A test
+decodes the real 26A434 entry instructions and uses their offsets to read
+the C encoder's output, confirming all four values. It also compiles the
+encoder as a freestanding AArch64 object with no unresolved runtime calls.
+
+```sh
+python3 tests/test-macos27-boot-args.py
+```
+
+This is reusable loader code, not a KC loader or complete boot-ABI validation.
+The legacy shim remains unchanged; no macOS payload/image was generated.
+KC mapping/self-fixup, PAC, ADT/platform support and physical boot remain
+unresolved. The public xnu-13432.1.9 tag and macos-270 manifest were rechecked
+and still missing. Actual entry analysis remains a possible source of
+further native bring-up work; do not replace it with relabeling the old XNU.
 
 ## Available migration tools
 
